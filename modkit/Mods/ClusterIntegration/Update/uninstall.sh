@@ -137,7 +137,7 @@ done
 # stale or edited manifest cannot make this remove stock files.
 if [[ -f "$MANIFEST" ]]; then
     typeset addf
-    grep ' add ' "$MANIFEST" 2>/dev/null | sed -e 's/^[^ ]* add //' | sort -u | while read -r addf; do
+    awk '$2 == "add" && !seen[$3]++ { print $3 }' "$MANIFEST" 2>/dev/null | while read -r addf; do
         case "$addf" in
             "$CLUSTER_DIR"/*|"$JAR_DIR"/ClusterIntegration_*)
                 [[ -f "$addf" ]] && backup_and_remove "$addf"
