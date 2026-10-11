@@ -6,7 +6,9 @@ Bridge Android Auto navigation from Porsche PCM5 / ~~VW / Audi~~ MH2P to instrum
 
 > **Status:** Beta (beta2_candidate_90d0b76) — Testing compatibility across Porsche Cayenne, Macan, Panamera and 911
 
-> **Download** [latest release](https://github.com/fifthBro/mh2p-cluster/raw/refs/heads/main/builds/ClusterIntegration_v0034_beta2_candidate_90d0b76.zip)
+> **Download (Porsche)** [ClusterIntegration_v0034_beta2_candidate_90d0b76.zip](https://github.com/jonny190/mh2p-cluster/raw/main/builds/ClusterIntegration_v0034_beta2_candidate_90d0b76.zip)
+>
+> **Download (Audi MH2p, experimental)** [ClusterIntegration_v0034_beta2_candidate_90d0b76_audi.zip](https://github.com/jonny190/mh2p-cluster/raw/main/builds/ClusterIntegration_v0034_beta2_candidate_90d0b76_audi.zip) and read the [Audi section](#audi-mh2p-e-tron-and-other-mlbevo-audis--experimental) first. The Porsche package aborts on an Audi with "Not a Porsche head unit", and copying only the scripts from `modkit/` over it is not enough: the Audi installer also needs `Update/aa_only/`, which is part of the Audi zip.
 
 ---
 
@@ -199,7 +201,7 @@ modkit/build_sd_package.sh builds/ClusterIntegration_v0034_beta2_candidate_90d0b
 
 Do it in two passes. The first pass installs everything in diagnostic mode: the JAR runs turn-by-turn only (`enableMapRender` is set to `false` in the installed config), the Android Auto hook loads and logs but does not inject the cluster service, and Android Auto otherwise behaves as stock. That pass answers the three questions that matter (does the shadowed Java class load on Audi firmware, do the arrows reach the virtual cockpit over BAP, does the hook resolve its symbols) with the smallest possible blast radius. It does not remove every risk: the hook's `routeMessage` interposer reads the receiver's `shared_ptr<IoBuffer>` layout on every incoming message regardless of the diagnostic switch, so a layout mismatch can still crash `gal` in this pass (that is what the rollback paths are for). The second pass goes live with the video path.
 
-1. Extract `builds/ClusterIntegration_v0034_beta2_candidate_90d0b76_audi.zip` to a FAT32 SD card and create an empty file `Mods/ClusterIntegration/diag.txt`. For a right-hand-drive car, copy `Mods/ClusterIntegration/config_overrides.example.txt` to `config_overrides.txt` in the same folder and uncomment `forceRHD=true` (it fixes the roundabout arrow correction and Waze keep-lane side regardless of what the car reports). Android Auto must already be activated on the unit.
+1. Extract the **Audi** zip, `builds/ClusterIntegration_v0034_beta2_candidate_90d0b76_audi.zip`, to an empty FAT32 SD card (not the Porsche zip, and not a Porsche card with the `modkit/` scripts copied over it: the installer needs the `Update/aa_only/` folder that only the Audi zip and the tracked `modkit/Mods/` tree contain). Then create an empty file `Mods/ClusterIntegration/diag.txt`. For a right-hand-drive car, copy `Mods/ClusterIntegration/config_overrides.example.txt` to `config_overrides.txt` in the same folder and uncomment `forceRHD=true` (it fixes the roundabout arrow correction and Waze keep-lane side regardless of what the car reports). Android Auto must already be activated on the unit.
 2. Follow the normal Installation steps above. After the reboot, pull the card and read `Logs/ClusterIntegration.log`:
    - `Head unit: release=MH2p_ER_AUG35_P2873 oem=AU type=G35 region=ER sw=2873 force=0` (your values will differ). `Aborting` means the gate refused, `ERROR` means the preflight or a backup check refused.
    - every `install:` line names a file that was written; `Backups:` names the folder holding the originals; `diag mode: ON` confirms the staged mode.

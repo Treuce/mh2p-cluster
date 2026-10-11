@@ -148,7 +148,10 @@ CARPLAY_HOOK=1
 if [[ $CARPLAY_HOOK -eq 0 ]]; then
     AA_JAR="$(ls -1t "$MOD_PATH"/aa_only/ClusterIntegration_*_aa.jar 2>/dev/null | head -1)"
     if [[ -z "$AA_JAR" || ! -f "$AA_JAR" ]]; then
-        print -u2 "ERROR: $MOD_PATH/aa_only/ClusterIntegration_*_aa.jar not found. Use the _audi package built by modkit/build_sd_package.sh, or create enable_carplay.txt to install the full JAR. Aborting before any change."
+        print -u2 "ERROR: $MOD_PATH/aa_only/ClusterIntegration_*_aa.jar not found. Aborting before any change."
+        print -u2 "       This folder is part of the Audi (_audi.zip) package and of the tracked modkit/Mods tree; it is missing when the Porsche"
+        print -u2 "       package is used with only the scripts copied over it. Extract the Audi zip to an empty card (or copy the whole"
+        print -u2 "       modkit/Mods/ClusterIntegration folder), or create Mods/ClusterIntegration/enable_carplay.txt to install the full JAR instead."
         exit 4
     fi
 fi
