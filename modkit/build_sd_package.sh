@@ -96,12 +96,20 @@ import os, sys, zipfile
 upd = sys.argv[1]
 DROP_PREFIX = "de/audi/app/terminalmode/smartphone/carplay/"
 DROP_EXACT = {"de/audi/app/terminalmode/smartphone/androidauto2/AndroidAuto2EventListener.class"}
+out_dir = os.path.join(upd, "aa_only")
+os.makedirs(out_dir, exist_ok=True)
+# A tracked aa_only jar may have been overlaid from modkit/Mods; drop any
+# that does not belong to a release JAR present in this package, so the
+# installer's "newest aa jar" choice is never ambiguous.
+release = {n[:-4] for n in os.listdir(upd) if n.startswith("ClusterIntegration_") and n.endswith(".jar")}
+for stale in os.listdir(out_dir):
+    if stale.endswith("_aa.jar") and stale[:-7] not in release:
+        os.remove(os.path.join(out_dir, stale))
+        print(f"  drop:    Mods/ClusterIntegration/Update/aa_only/{stale} (no matching release JAR)")
 for name in sorted(os.listdir(upd)):
     if not (name.startswith("ClusterIntegration_") and name.endswith(".jar")):
         continue
     src = os.path.join(upd, name)
-    out_dir = os.path.join(upd, "aa_only")
-    os.makedirs(out_dir, exist_ok=True)
     dst = os.path.join(out_dir, name[:-4] + "_aa.jar")
     kept = dropped = 0
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
