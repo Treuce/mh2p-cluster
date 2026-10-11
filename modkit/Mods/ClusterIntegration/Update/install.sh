@@ -42,10 +42,23 @@ set -u
 export MOD_PATH="${modPath:-${MOD_PATH:-}}"
 [[ -z "$MOD_PATH" ]] && { print -u2 "ERROR: MOD_PATH not set"; exit 1; }
 
-# grep -a (treat binaries as text) is used to scan jars and libraries; probe
-# once and fall back to plain grep (exit status still reflects a match).
-GREP_A="-a"
-print x | grep -a -q x 2>/dev/null || GREP_A=""
+# The MH2p QNX image carries a trimmed toolset (no tr, for example). Only
+# commands the upstream scripts already use are relied on unconditionally
+# (awk, sed, cut, head, wc, ls, cp, mv, rm, mkdir, chmod, dd, sum, date,
+# sync, slay, mount). grep and find are optional: a check that needs them
+# is reported as skipped, never as a negative result.
+have() { whence "$1" >/dev/null 2>&1; }
+TOOLS_MISSING=""
+for t in grep find awk sed cut head wc sum dd; do
+    have "$t" || TOOLS_MISSING="$TOOLS_MISSING $t"
+done
+# grep -a (treat binaries as text): probe once, fall back to plain grep
+# (exit status still reflects a match).
+GREP_A=""
+if have grep; then
+    GREP_A="-a"
+    print x | grep -a -q x 2>/dev/null || GREP_A=""
+fi
 
 [[ ! -e /mnt/app ]] && mount -t qnx6 /dev/mnanda0t177.1 /mnt/app
 mount -uw /mnt/app/
@@ -70,6 +83,7 @@ FORCE_INSTALL=0
 [[ -e "$MOD_ROOT/force_install.txt" ]] && FORCE_INSTALL=1
 
 print "Head unit:         release=$RELEASE_VERSION oem=$OEM type=$TYPE region=$REGION sw=$SOFTWARE_VERSION force=$FORCE_INSTALL"
+print "tools missing:    ${TOOLS_MISSING:- none}"
 
 # Supported head units:
 #   PO  Porsche PCM5 (MH2P) firmware 26xx / 28xx     - tested
@@ -169,11 +183,30 @@ done
 
 # Print every stock HMI jar (excluding ours) whose directory lists the given
 # class path. Jar directories are stored uncompressed, so grep finds it.
+# Uses shell globbing (no find). Returns 2 when grep is unavailable.
 jars_containing() {
     typeset j
-    find "$JAR_DIR" -name '*.jar' 2>/dev/null | grep -v '/ClusterIntegration_' | grep -v '/AndroidAutoCluster_' | while read j; do
+    have grep || return 2
+    for j in "$JAR_DIR"/*.jar "$JAR_DIR"/*/*.jar; do
+        [[ -f "$j" ]] || continue
+        case "$j" in
+            */ClusterIntegration_*|*/AndroidAutoCluster_*) continue ;;
+        esac
         if grep $GREP_A -q -- "$1" "$j" 2>/dev/null; then print -r -- "$j"; fi
     done
+    return 0
+}
+stock_jar_count() {
+    typeset j n
+    n=0
+    for j in "$JAR_DIR"/*.jar "$JAR_DIR"/*/*.jar; do
+        [[ -f "$j" ]] || continue
+        case "$j" in
+            */ClusterIntegration_*|*/AndroidAutoCluster_*) continue ;;
+        esac
+        n=$((n + 1))
+    done
+    print "$n"
 }
 
 # The mod's Java classes shadow the stock AndroidAuto2Subsystem and construct
@@ -182,23 +215,36 @@ jars_containing() {
 # shadowed subsystem dies with NoClassDefFoundError and Android Auto stops
 # working. Porsche: informational. Audi: abort unless forced.
 check_hmi_class() {
-    typeset cls hits
+    typeset cls hits njars
     cls="de/audi/app/car/adi/legacy/sportchrono/StorageMountHandler.class"
-    hits="$(jars_containing "$cls" | head -3 | sed -e 's|.*/||' | tr '\n' ' ')"
+    if ! have grep; then
+        print "hmi class check:   skipped (grep is not available on this unit)"
+        return 2
+    fi
+    njars="$(stock_jar_count)"
+    if [[ "$njars" -eq 0 ]]; then
+        print "hmi class check:   skipped (no stock jars found under $JAR_DIR)"
+        return 2
+    fi
+    hits="$(jars_containing "$cls" | head -3 | sed -e 's|.*/||' | awk '{ printf "%s ", $0 }')"
     if [[ -n "$hits" ]]; then
         print "hmi class check:   StorageMountHandler found in: $hits"
         return 0
     fi
-    print "hmi class check:   StorageMountHandler NOT found in any jar under $JAR_DIR"
+    print "hmi class check:   StorageMountHandler NOT found in any of $njars stock jar(s) under $JAR_DIR"
     return 1
 }
-if ! check_hmi_class; then
+check_hmi_class
+hmi_rc=$?
+if [[ $hmi_rc -eq 1 ]]; then
     if [[ "$OEM" == "AU" && $FORCE_INSTALL -eq 0 ]]; then
         print "The mod's Java classes link against that Porsche-side class; installing would most likely break Android Auto on this unit."
         print "Aborting before any change. Create Mods/ClusterIntegration/force_install.txt to install anyway (rollback is available)."
         exit 0
     fi
     print "WARNING: continuing anyway (OEM=$OEM force=$FORCE_INSTALL)."
+elif [[ $hmi_rc -eq 2 ]]; then
+    print "WARNING: the HMI class check could not run, so this unit's Java compatibility is unverified; continuing. If Android Auto stops working, roll back."
 fi
 
 BACKUP_DIR="$MOD_PATH/Backup"
@@ -381,8 +427,9 @@ chmod 644 "$CLUSTER_DIR/cluster_config.json" 2>/dev/null
 apply_override() {
     typeset cfg
     cfg="$CLUSTER_DIR/cluster_config.json"
-    if tr -d '\r' < "$cfg" | awk -v key="$1" -v val="$2" '
+    if awk -v key="$1" -v val="$2" '
         BEGIN { inblk = 0; done = 0 }
+        { sub(/\r$/, "") }
         /^[ \t]*"config"[ \t]*:[ \t]*\{[ \t]*$/ { inblk = 1 }
         inblk && !done {
             pat = "^[ \t]*\"" key "\"[ \t]*:[ \t]*"
@@ -399,7 +446,7 @@ apply_override() {
         inblk && /^[ \t]*\},?[ \t]*$/ { inblk = 0 }
         { print }
         END { if (!done) exit 3 }
-    ' > "$cfg.ovr"; then
+    ' "$cfg" > "$cfg.ovr"; then
         mv -f "$cfg.ovr" "$cfg" && chmod 644 "$cfg" 2>/dev/null
         return 0
     fi
@@ -417,12 +464,22 @@ apply_override() {
 # file for those. Re-running without the file reinstalls the shipped config.
 OVERRIDES="$MOD_ROOT/config_overrides.txt"
 if [[ -f "$OVERRIDES" ]]; then
-    tr -d '\r' < "$OVERRIDES" | sed -e 's/[ 	]*#.*$//' -e 's/^#.*$//' | grep '=' | while IFS='=' read -r k v; do
+    # strip CR and '#' comments, keep key=value lines (awk only: no tr/grep)
+    awk '{ sub(/\r$/, ""); sub(/[ \t]*#.*$/, ""); if (index($0, "=") > 0) print }' "$OVERRIDES" | while IFS='=' read -r k v; do
         k="$(print -r -- "$k" | sed -e 's/^[ 	]*//' -e 's/[ 	]*$//')"
         v="$(print -r -- "$v" | sed -e 's/^[ 	]*//' -e 's/[ 	]*$//')"
         [[ -z "$k" || -z "$v" ]] && continue
         # value must be a JSON scalar: true, false, a number, or a quoted string
-        if [[ "$v" != true && "$v" != false ]] && ! print -r -- "$v" | grep -q '^-\{0,1\}[0-9]\{1,\}\(\.[0-9]\{1,\}\)\{0,1\}$' && ! print -r -- "$v" | grep -q '^"[^"]*"$'; then
+        vok=0
+        case "$v" in
+            true|false) vok=1 ;;
+            +([0-9])|-+([0-9])|+([0-9]).+([0-9])|-+([0-9]).+([0-9])) vok=1 ;;
+            \"*\")
+                inner="${v#\"}"; inner="${inner%\"}"
+                [[ "$inner" != *\"* ]] && vok=1
+                ;;
+        esac
+        if [[ $vok -eq 0 ]]; then
             print "config override:   WARN '$k' value $v is not true/false, a number or a double-quoted string, ignored"
             continue
         fi
@@ -515,11 +572,24 @@ fi
 # pass-through (cluster stays blank), never a crash. Object layouts cannot
 # be checked here. Output goes to the ModKit log for the first-boot review.
 check_hook_symbols() {
-    typeset lib sym present missing found
-    lib="$(find /mnt/app/eso /mnt/app/armle -name 'libautoreceiver*' 2>/dev/null | head -1)"
-    [[ -z "$lib" ]] && lib="$(find /mnt/app -name 'libautoreceiver*' 2>/dev/null | head -1)"
+    typeset lib sym present missing found cand
+    if ! have grep; then
+        print "hook symbols:      skipped (grep is not available on this unit)"
+        return 0
+    fi
+    lib=""
+    if have find; then
+        lib="$(find /mnt/app/eso /mnt/app/armle -name 'libautoreceiver*' 2>/dev/null | head -1)"
+        [[ -z "$lib" ]] && lib="$(find /mnt/app -name 'libautoreceiver*' 2>/dev/null | head -1)"
+    else
+        for cand in /mnt/app/eso/lib/libautoreceiver* /mnt/app/eso/lib/*/libautoreceiver* /mnt/app/armle/lib/libautoreceiver* \
+                    /mnt/app/armle/usr/lib/libautoreceiver* /mnt/app/eso/bin/apps/libautoreceiver* /mnt/app/eso/bin/apps/*/libautoreceiver* \
+                    /mnt/app/*/lib/libautoreceiver* /mnt/app/*/*/lib/libautoreceiver*; do
+            if [[ -f "$cand" ]]; then lib="$cand"; break; fi
+        done
+    fi
     if [[ -z "$lib" ]]; then
-        print "hook symbols:      libautoreceiver not found under /mnt/app (check skipped)"
+        print "hook symbols:      libautoreceiver not found under /mnt/app (check skipped$(have find || print ', no find on this unit'))"
         return 0
     fi
     set -A HOOK_SYMS \
@@ -549,7 +619,7 @@ check_hook_symbols() {
         -e "${HOOK_SYMS[12]}" -e "${HOOK_SYMS[13]}" "$lib" > "$symtmp" 2>/dev/null
     symrc=$?
     if [[ $symrc -le 1 ]]; then
-        found="$(sort -u "$symtmp" 2>/dev/null)"
+        found="$(awk '!seen[$0]++' "$symtmp" 2>/dev/null)"
     else
         # grep without -o support: one plain grep per symbol
         found=""
@@ -561,7 +631,7 @@ $sym"
     rm -f "$symtmp"
     present=0; missing=""
     for sym in "${HOOK_SYMS[@]}"; do
-        if print -r -- "$found" | grep -q -- "^$sym\$"; then
+        if print -r -- "$found" | awk -v s="$sym" '$0 == s { f = 1 } END { exit !f }'; then
             present=$((present + 1))
         else
             missing="$missing $sym"
