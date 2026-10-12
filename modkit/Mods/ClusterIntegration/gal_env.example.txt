@@ -10,9 +10,10 @@
 #
 # Insets, in pixels of the codec frame: the phone keeps its cluster UI out
 # of these margins, so a cropped (fill / zoom > 1) window loses no content.
-# Example for a 1280x720 stream shown with gal_h264.mode="fill" on the
-# e-tron's 1920x722 cockpit (centre 481 rows visible):
-#GAL_CLUSTER_INSET_TOP=120
-#GAL_CLUSTER_INSET_BOTTOM=120
+# e-tron (1920x722 cockpit) with gal_h264.codecRes=1080 and mode="fill":
+# the centre 722 rows of the 1080 are shown, so keep the UI out of 180 px
+# top and bottom. With codecRes=720 use 120 instead.
+#GAL_CLUSTER_INSET_TOP=180
+#GAL_CLUSTER_INSET_BOTTOM=180
 #GAL_CLUSTER_INSET_LEFT=0
 #GAL_CLUSTER_INSET_RIGHT=0
