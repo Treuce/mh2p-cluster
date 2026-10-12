@@ -44,7 +44,7 @@ public class StubCheck {
         Object o = c.getConstructor(org.osgi.framework.BundleContext.class, de.audi.atip.log.LogChannel.class).newInstance(null, null);
         c.getMethod("init").invoke(o);
         c.getMethod("mountStorageRW", String.class).invoke(o, "/fs/sda0");
-        System.out.println("stub loads and runs (class file major " + (((int) new java.io.DataInputStream(StubCheck.class.getResourceAsStream("/de/audi/app/car/adi/legacy/sportchrono/StorageMountHandler.class")).skipBytes(6) == 6 ? "" : "") + ")");
+        System.out.println("stub loads and runs under -Xverify:all");
     }
 }
 JAVA
@@ -52,3 +52,23 @@ javac --release 8 -nowarn -d "$T" -cp "$HERE/compile-deps" "$T/StubCheck.java" \
     "$HERE/compile-deps/org/osgi/framework/BundleContext.java" "$HERE/compile-deps/de/audi/atip/log/LogChannel.java"
 java -Xverify:all -cp "$T:$OUT" StubCheck
 echo "built: $CLS"
+
+# Package the class as its own jar for the Audi SD package. install.sh adds
+# it to /mnt/app/eso/hmi/lsd/jars on Audi units whose HMI image does not
+# provide the class (lsd.sh puts every jar in that directory on the JVM boot
+# class path ahead of /ifs/lsd.jxe). The name keeps the ClusterIntegration_
+# prefix so uninstall.sh removes it with the mod's other jars.
+JAR_OUT="$HERE/../Mods/ClusterIntegration/Update/audi/ClusterIntegration_StorageMountHandler_stub.jar"
+mkdir -p "$(dirname "$JAR_OUT")"
+python3 - "$OUT" "$JAR_OUT" <<'PYS'
+import os, sys, zipfile
+out, jar = sys.argv[1], sys.argv[2]
+entry = "de/audi/app/car/adi/legacy/sportchrono/StorageMountHandler.class"
+with zipfile.ZipFile(jar, "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr(zipfile.ZipInfo("META-INF/MANIFEST.MF", (1980, 1, 1, 0, 0, 0)),
+               "Manifest-Version: 1.0\nCreated-By: mh2p-cluster modkit/stub/build_stub.sh\n\n")
+    info = zipfile.ZipInfo(entry, (1980, 1, 1, 0, 0, 0))
+    info.compress_type = zipfile.ZIP_DEFLATED
+    z.writestr(info, open(os.path.join(out, entry), "rb").read())
+print("packaged: " + jar)
+PYS

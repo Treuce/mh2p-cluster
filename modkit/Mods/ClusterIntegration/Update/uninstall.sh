@@ -13,7 +13,9 @@
 # - Restores original gal binary: removes wrapper at /mnt/app/eso/bin/apps/gal
 #   and moves gal.real back to gal.
 # - Same for dio_manager.
-# - Backs up and removes JAR + native binaries from their install dirs.
+# - Backs up and removes JAR + native binaries from their install dirs
+#   (every ClusterIntegration_* jar, which includes the Audi stand-in jar
+#   ClusterIntegration_StorageMountHandler_stub.jar).
 # - If NAME.real is missing but NAME is still our wrapper, restores the
 #   original from Backup/NAME.real on the SD card.
 # - Appends what it did to Backup/manifest.txt.
@@ -25,6 +27,10 @@ export MOD_PATH="${modPath:-${MOD_PATH:-}}"
 
 [[ ! -e /mnt/app ]] && mount -t qnx6 /dev/mnanda0t177.1 /mnt/app
 mount -uw /mnt/app/
+
+# Same PATH extension as install.sh (part of the unit's toolset lives under
+# /mnt/app/armle); appended, never prepended.
+export PATH="${PATH:-/bin:/usr/bin}:/mnt/app/armle/usr/bin:/mnt/app/armle/bin:/usr/bin:/bin"
 
 export RELEASE_VERSION=`/mnt/app/armle/usr/bin/pc b:46924065:401 | cut -c 61- | sed ':a;N;$!ba;s/\n//g' | sed -e 's/\.//g' | sed -e 's/ //g'`
 export OEM="$(echo $RELEASE_VERSION | cut -d'_' -f3 | cut -b -2)"

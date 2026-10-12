@@ -11,7 +11,9 @@
 #
 # It also derives an Android-Auto-only JAR (Update/aa_only/<name>_aa.jar,
 # without the CarPlay classes) that install.sh prefers on Audi unless
-# enable_carplay.txt is present.
+# enable_carplay.txt is present. The Audi stand-in jar for the Porsche-only
+# StorageMountHandler class (Update/audi/, built by modkit/stub/build_stub.sh)
+# is tracked under modkit/Mods and copied in with the overlay.
 #
 # Usage:
 #   modkit/build_sd_package.sh <source-release.zip> <output.zip>

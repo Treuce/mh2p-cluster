@@ -54,6 +54,19 @@ sigs() { # jar class
 
 rc=0
 mod_entries="$(unzip -Z1 "$MOD_JAR")"
+# Does the unit provide the Porsche-side class the mod constructs? Audi
+# images do not (verified on an e-tron P2873); the installer then adds the
+# stand-in jar from Update/audi/.
+SM=de/audi/app/car/adi/legacy/sportchrono/StorageMountHandler.class
+sm_jar=""
+while IFS= read -r -d '' j; do
+  if unzip -Z1 "$j" 2>/dev/null | grep -qx "$SM"; then sm_jar="$j"; break; fi
+done < <(find "$REF_DIR" -name '*.jar' -print0 | sort -z)
+if [[ -n "$sm_jar" ]]; then
+  echo "PRESENT  ${SM%.class} in ${sm_jar##*/} (the stand-in jar is not needed on this unit)"
+else
+  echo "ABSENT   ${SM%.class} in every jar under $REF_DIR (expected on Audi: install.sh adds the stand-in jar)"
+fi
 for cls in "${SHADOWED[@]}"; do
   if ! grep -qx "$cls.class" <<<"$mod_entries"; then
     echo "skip     $cls (not in ${MOD_JAR##*/}; run this check with the full release JAR to compare every shadowed class)"
