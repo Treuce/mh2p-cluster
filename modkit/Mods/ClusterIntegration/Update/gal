@@ -43,6 +43,21 @@ for diag in /mnt/app/eso/bin/apps/cluster/diag_mode; do
     fi
 done
 
+# Per-car environment staged by install.sh from Mods/ClusterIntegration/
+# gal_env.txt (GAL_CLUSTER_INSET_*, GAL_CLUSTER_LOG=1, ...). Applied after
+# the diag block so an explicit value wins.
+GAL_ENV=/mnt/app/eso/bin/apps/cluster/gal_env
+if [ -f "$GAL_ENV" ]; then
+    while read envline; do
+        case "$envline" in
+            GAL_CLUSTER_[A-Z0-9_]*=*)
+                export "$envline"
+                echo "gal env: $envline" >> $GAL_PRELOAD_LOG
+                ;;
+        esac
+    done < "$GAL_ENV"
+fi
+
 echo "gal_start: $* LD_PRELOAD: $LD_PRELOAD LD_LIBRARY_PATH:$LD_LIBRARY_PATH" >> $GAL_PRELOAD_LOG
 
 if [ ! -x /mnt/app/eso/bin/apps/gal.real ]; then

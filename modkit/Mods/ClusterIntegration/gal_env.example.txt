@@ -1,0 +1,18 @@
+# Copy to gal_env.txt (next to Update/) to pass settings to the Android Auto
+# hook. One GAL_CLUSTER_NAME=value per line, no spaces; '#' starts a comment.
+# install.sh copies the valid lines to /mnt/app/eso/bin/apps/cluster/gal_env
+# and the gal wrapper exports them before starting gal.real. Remove the
+# file and re-run the installer to clear them. Values win over diag mode.
+#
+# Live logging without diagnostic mode (/tmp/gal_cluster.log, RAM):
+#GAL_CLUSTER_LOG=1
+#GAL_CLUSTER_LOG_DETAILS=1
+#
+# Insets, in pixels of the codec frame: the phone keeps its cluster UI out
+# of these margins, so a cropped (fill / zoom > 1) window loses no content.
+# Example for a 1280x720 stream shown with gal_h264.mode="fill" on the
+# e-tron's 1920x722 cockpit (centre 481 rows visible):
+#GAL_CLUSTER_INSET_TOP=120
+#GAL_CLUSTER_INSET_BOTTOM=120
+#GAL_CLUSTER_INSET_LEFT=0
+#GAL_CLUSTER_INSET_RIGHT=0

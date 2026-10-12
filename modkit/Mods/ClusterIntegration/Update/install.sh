@@ -20,9 +20,18 @@
 #     enable_carplay.txt  install the CarPlay hook and full JAR on Audi
 #     config_overrides.txt  key=value lines applied to the installed
 #                         cluster_config.json "config" block (e.g. forceRHD=true)
+#     no_stub.txt         Audi: do not install the StorageMountHandler stand-in
+#     gal_env.txt         GAL_CLUSTER_*=value lines exported to the Android
+#                         Auto hook by the gal wrapper (insets, live logging)
 #     uninstall.txt       ModKit convention: run uninstall.sh instead
 # - Copies JAR, cluster, gal_cluster.so, dio_cluster.so to their target dirs.
-# - Skips copies when the target file is byte-identical to the source.
+# - On Audi also installs Update/audi/ClusterIntegration_StorageMountHandler_
+#   stub.jar, a no-op copy of a Porsche-only class the mod's Java code
+#   constructs, unless the HMI image is seen to provide the class or
+#   no_stub.txt exists.
+# - Skips copies when the target file is identical to the source (by
+#   content where the unit has a comparison tool, else by size, wc counts
+#   and modification time).
 # - Backs up any existing target before overwriting (timestamped, into
 #   $MOD_PATH/Backup/).
 # - Replaces /mnt/app/eso/bin/apps/gal with a wrapper script that sets
@@ -42,26 +51,95 @@ set -u
 export MOD_PATH="${modPath:-${MOD_PATH:-}}"
 [[ -z "$MOD_PATH" ]] && { print -u2 "ERROR: MOD_PATH not set"; exit 1; }
 
-# The MH2p QNX image carries a trimmed toolset (no tr, for example). Only
-# commands the upstream scripts already use are relied on unconditionally
-# (awk, sed, cut, head, wc, ls, cp, mv, rm, mkdir, chmod, dd, sum, date,
-# sync, slay, mount). grep and find are optional: a check that needs them
-# is reported as skipped, never as a negative result.
-have() { whence "$1" >/dev/null 2>&1; }
-TOOLS_MISSING=""
-for t in grep find awk sed cut head wc sum dd; do
-    have "$t" || TOOLS_MISSING="$TOOLS_MISSING $t"
-done
-# grep -a (treat binaries as text): probe once, fall back to plain grep
-# (exit status still reflects a match).
-GREP_A=""
-if have grep; then
-    GREP_A="-a"
-    print x | grep -a -q x 2>/dev/null || GREP_A=""
-fi
-
 [[ ! -e /mnt/app ]] && mount -t qnx6 /dev/mnanda0t177.1 /mnt/app
 mount -uw /mnt/app/
+
+# The ModKit runs this script with a short PATH, and part of the unit's
+# toolset lives under /mnt/app/armle (wc, awk and sed on an e-tron).
+# Appended, never prepended, so the ModKit's own choices win.
+export PATH="${PATH:-/bin:/usr/bin}:/mnt/app/armle/usr/bin:/mnt/app/armle/bin:/usr/bin:/bin"
+
+# The MH2p QNX image carries a trimmed toolset: an e-tron has no tr, sum,
+# cmp, od, cksum, md5sum, unzip or strings, and its grep has no -a. Only
+# commands the upstream scripts already use are relied on unconditionally
+# (awk, sed, cut, head, ls, cp, mv, rm, mkdir, chmod, dd, date, sync, slay,
+# mount). Everything else is probed: a check that needs a missing tool is
+# reported as skipped, never as a negative result, and file comparison
+# degrades to a size check.
+have() { whence "$1" >/dev/null 2>&1; }
+TOOLS_MISSING=""
+for t in grep find awk sed cut head wc sum cmp diff od dd; do
+    have "$t" || TOOLS_MISSING="$TOOLS_MISSING $t"
+done
+
+# ---- file size and content comparison with whatever this unit offers ----
+# Size: wc -c, or ls -l field 5 (the same in every POSIX ls) without wc.
+file_size() {
+    typeset sz
+    sz=""
+    if have wc; then sz=$(wc -c < "$1" 2>/dev/null | awk '{print $1}'); fi
+    [[ "$sz" == +([0-9]) ]] || sz=$(ls -l "$1" 2>/dev/null | awk '{print $5}')
+    [[ "$sz" == +([0-9]) ]] || sz=""
+    print -r -- "$sz"
+}
+# Content: the first of cmp, diff, sum, cksum, md5sum, od, wc that exists
+# and tells two small known files apart. wc is the weakest (byte, line and
+# word counts, not a checksum) but it is binary-safe and the e-tron has it.
+# FILE_CMP stays empty when none works.
+same_content_with() { # TOOL A B: 0 same, 1 different, 2 could not compare
+    typeset h1 h2
+    h1=""; h2=""
+    case "$1" in
+        cmp)    cmp -s "$2" "$3" >/dev/null 2>&1
+                case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac ;;
+        diff)   diff "$2" "$3" >/dev/null 2>&1
+                case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac ;;
+        sum)    h1=$(sum < "$2" 2>/dev/null);    h2=$(sum < "$3" 2>/dev/null) ;;
+        cksum)  h1=$(cksum < "$2" 2>/dev/null);  h2=$(cksum < "$3" 2>/dev/null) ;;
+        md5sum) h1=$(md5sum < "$2" 2>/dev/null); h2=$(md5sum < "$3" 2>/dev/null) ;;
+        od)     h1=$(od -An -v -tu1 "$2" 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) h = (h * 31 + $i) % 4294967296 } END { print h + 0 }')
+                h2=$(od -An -v -tu1 "$3" 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) h = (h * 31 + $i) % 4294967296 } END { print h + 0 }') ;;
+        wc)     h1=$(wc -l -w -c < "$2" 2>/dev/null | awk 'NF == 3 { print $1 "/" $2 "/" $3 }')
+                h2=$(wc -l -w -c < "$3" 2>/dev/null | awk 'NF == 3 { print $1 "/" $2 "/" $3 }') ;;
+        *)      return 2 ;;
+    esac
+    [[ -n "$h1" && -n "$h2" ]] || return 2
+    [[ "$h1" == "$h2" ]] && return 0
+    return 1
+}
+FILE_CMP=""
+file_cmp_probe() {
+    typeset t a b
+    a="/tmp/cluster_cmp_a.$$"; b="/tmp/cluster_cmp_b.$$"
+    print "cluster probe one" > "$a"; print "cluster probe two, longer" > "$b"
+    for t in cmp diff sum cksum md5sum od wc; do
+        have "$t" || continue
+        same_content_with "$t" "$a" "$a"; [[ $? -eq 0 ]] || continue
+        same_content_with "$t" "$a" "$b"; [[ $? -eq 1 ]] || continue
+        FILE_CMP="$t"; break
+    done
+    rm -f "$a" "$b"
+}
+file_cmp_probe
+# 0 = identical, 1 = different, 2 = same size but the content cannot be
+# compared on this unit. With a real comparator the content decides. With
+# only the wc fingerprint (counts, not a checksum: a same-length edit such
+# as 2000 -> 3000 keeps it) the two files must also carry the same
+# modification time: every copy here is cp -p, so an unchanged file keeps
+# the card file's time and anything new on the card has another.
+files_identical() {
+    typeset sz1 sz2
+    [[ -f "$1" && -f "$2" ]] || return 1
+    sz1=$(file_size "$1"); sz2=$(file_size "$2")
+    [[ -n "$sz1" && -n "$sz2" && "$sz1" == "$sz2" ]] || return 1
+    [[ -n "$FILE_CMP" ]] || return 2
+    same_content_with "$FILE_CMP" "$1" "$2"
+    case $? in 0) ;; 1) return 1 ;; *) return 2 ;; esac
+    if [[ "$FILE_CMP" == wc ]]; then
+        [[ "$1" -nt "$2" || "$1" -ot "$2" ]] && return 1
+    fi
+    return 0
+}
 
 # ex: MH2p_US_PO416_P2870 (Porsche), MH2p_ER_AUG35_P2873 (Audi e-tron),
 #     MH2p_ER_AU_P2873 (Audi units without a TYPE code, e.g. Q3/A1)
@@ -84,6 +162,11 @@ FORCE_INSTALL=0
 
 print "Head unit:         release=$RELEASE_VERSION oem=$OEM type=$TYPE region=$REGION sw=$SOFTWARE_VERSION force=$FORCE_INSTALL"
 print "tools missing:    ${TOOLS_MISSING:- none}"
+case "$FILE_CMP" in
+    "")  print "file compare:      size only (no cmp, diff, sum, cksum, md5sum, od or wc on this unit)" ;;
+    wc)  print "file compare:      wc (byte, line and word counts; no checksum tool on this unit)" ;;
+    *)   print "file compare:      $FILE_CMP" ;;
+esac
 
 # Supported head units:
 #   PO  Porsche PCM5 (MH2P) firmware 26xx / 28xx     - tested
@@ -181,74 +264,188 @@ for rootcfg in /fs/usb0_0 /fs/usb1_0 /fs/sda0 /fs/sdb0; do
     fi
 done
 
-# Print every stock HMI jar (excluding ours) whose directory lists the given
-# class path. Jar directories are stored uncompressed, so grep finds it.
-# Uses shell globbing (no find). Returns 2 when grep is unavailable.
-jars_containing() {
-    typeset j
-    have grep || return 2
-    for j in "$JAR_DIR"/*.jar "$JAR_DIR"/*/*.jar; do
-        [[ -f "$j" ]] || continue
-        case "$j" in
-            */ClusterIntegration_*|*/AndroidAutoCluster_*) continue ;;
-        esac
-        if grep $GREP_A -q -- "$1" "$j" 2>/dev/null; then print -r -- "$j"; fi
-    done
-    return 0
-}
-stock_jar_count() {
-    typeset j n
-    n=0
-    for j in "$JAR_DIR"/*.jar "$JAR_DIR"/*/*.jar; do
-        [[ -f "$j" ]] || continue
-        case "$j" in
-            */ClusterIntegration_*|*/AndroidAutoCluster_*) continue ;;
-        esac
-        n=$((n + 1))
-    done
-    print "$n"
+NEW_JAR="$(ls -1t "$MOD_PATH"/ClusterIntegration_*.jar 2>/dev/null | head -1)"
+[[ -z "$NEW_JAR" || ! -f "$NEW_JAR" ]] && {
+    print -u2 "ERROR: no ClusterIntegration_*.jar in $MOD_PATH"
+    exit 3
 }
 
-# The mod's Java classes shadow the stock AndroidAuto2Subsystem and construct
-# de.audi.app.car.adi.legacy.sportchrono.StorageMountHandler ("Sport Chrono"
-# is a Porsche feature). If no HMI jar on this unit contains that class the
-# shadowed subsystem dies with NoClassDefFoundError and Android Auto stops
-# working. Porsche: informational. Audi: abort unless forced.
-check_hmi_class() {
-    typeset cls hits njars
-    cls="de/audi/app/car/adi/legacy/sportchrono/StorageMountHandler.class"
-    if ! have grep; then
-        print "hmi class check:   skipped (grep is not available on this unit)"
-        return 2
-    fi
-    njars="$(stock_jar_count)"
-    if [[ "$njars" -eq 0 ]]; then
-        print "hmi class check:   skipped (no stock jars found under $JAR_DIR)"
-        return 2
-    fi
-    hits="$(jars_containing "$cls" | head -3 | sed -e 's|.*/||' | awk '{ printf "%s ", $0 }')"
-    if [[ -n "$hits" ]]; then
-        print "hmi class check:   StorageMountHandler found in: $hits"
-        return 0
-    fi
-    print "hmi class check:   StorageMountHandler NOT found in any of $njars stock jar(s) under $JAR_DIR"
+# ---- Which stock classes does this HMI image provide? --------------------
+# The mod's AndroidAuto2Subsystem shadows the stock one and constructs
+# de.audi.app.car.adi.legacy.sportchrono.StorageMountHandler, a Porsche-side
+# class ("Sport Chrono"). Without that class the shadowed subsystem dies
+# with NoClassDefFoundError and Android Auto stops working; on Audi the
+# stand-in jar under Update/audi/ provides a no-op copy.
+#
+# Where the stock classes live: /ifs/lsd.jxe is what lsd.sh puts on the JVM
+# boot class path (a J9 ROM class image); /mnt/app/eso/hmi/lsd/lsd.jar is a
+# plain jar of the same code on the units seen so far; lsd/jars holds small
+# plugin jars. Jar entry names sit uncompressed in the central directory,
+# so a text search finds them, and only the last 8 MB of a big jar is
+# searched (copied out with dd).
+#
+# The QNX grep on an e-tron has no -a and never matched inside a jar, so
+# each candidate command is self-tested on the mod's own JAR (whose central
+# directory lists the probe class, and does not list a made-up one) and the
+# first that passes is used. With none, the checks are reported as skipped,
+# never as "not found".
+LSD_DIR=/mnt/app/eso/hmi/lsd
+LSD_JXE=/ifs/lsd.jxe
+BIN_SEARCH=""
+bin_search() { # NEEDLE FILE: 0 match, 1 no match or error, 2 no usable command
+    typeset rc
+    [[ -f "$2" ]] || return 1
+    case "$BIN_SEARCH" in
+        grep-aq) grep -a -q "$1" "$2" 2>/dev/null; rc=$? ;;
+        grep-q)  grep -q "$1" "$2" 2>/dev/null; rc=$? ;;
+        grep)    grep "$1" "$2" >/dev/null 2>&1; rc=$? ;;
+        awk)     awk -v n="$1" 'index($0, n) { f = 1; exit } END { exit !f }' "$2" 2>/dev/null; rc=$? ;;
+        *)       return 2 ;;
+    esac
+    [[ $rc -eq 0 ]] && return 0
     return 1
 }
-check_hmi_class
-hmi_rc=$?
-if [[ $hmi_rc -eq 1 ]]; then
-    if [[ "$OEM" == "AU" && $FORCE_INSTALL -eq 0 ]]; then
-        print "The mod's Java classes link against that Porsche-side class; installing would most likely break Android Auto on this unit."
-        print "Aborting before any change. Create Mods/ClusterIntegration/force_install.txt to install anyway (rollback is available)."
-        exit 0
+bin_search_probe() {
+    typeset cand yes no
+    yes="de/audi/app/terminalmode/smartphone/androidauto2/AndroidAuto2Subsystem.class"
+    no="de/audi/app/terminalmode/smartphone/androidauto2/NoSuchClassForTheProbe.class"
+    for cand in grep-aq grep-q grep awk; do
+        case "$cand" in grep*) have grep || continue ;; awk) have awk || continue ;; esac
+        BIN_SEARCH="$cand"
+        bin_search "$yes" "$NEW_JAR" || continue
+        bin_search "$no" "$NEW_JAR" && continue
+        return 0
+    done
+    BIN_SEARCH=""
+    return 1
+}
+bin_search_probe
+case "$BIN_SEARCH" in
+    grep-aq)     print "binary search:     grep -a (self-test on ${NEW_JAR##*/} passed)" ;;
+    grep-q|grep) print "binary search:     grep (self-test on ${NEW_JAR##*/} passed)" ;;
+    awk)         print "binary search:     awk (self-test on ${NEW_JAR##*/} passed; grep cannot read a binary file on this unit)" ;;
+    *)           print "binary search:     none (neither grep nor awk finds a class name inside ${NEW_JAR##*/} on this unit; class and symbol checks skipped)" ;;
+esac
+
+# Last 8 MB of lsd.jar (its central directory) copied to /tmp with dd, or
+# the file itself when it is small or dd fails. Sets LSD_TAIL.
+LSD_TAIL=""
+lsd_jar_tail() {
+    typeset sz skip
+    [[ -f "$LSD_DIR/lsd.jar" ]] || return 1
+    sz="$(file_size "$LSD_DIR/lsd.jar")"
+    if [[ "$sz" == +([0-9]) && "$sz" -gt 8388608 ]]; then
+        LSD_TAIL="/tmp/cluster_lsdtail.$$"
+        skip=$(( (sz - 8388608) / 65536 ))
+        if ! dd if="$LSD_DIR/lsd.jar" of="$LSD_TAIL" bs=65536 skip="$skip" >/dev/null 2>&1 || [[ ! -s "$LSD_TAIL" ]]; then
+            rm -f "$LSD_TAIL"; LSD_TAIL="$LSD_DIR/lsd.jar"
+        fi
+    else
+        LSD_TAIL="$LSD_DIR/lsd.jar"
     fi
-    print "WARNING: continuing anyway (OEM=$OEM force=$FORCE_INSTALL)."
-elif [[ $hmi_rc -eq 2 ]]; then
-    print "WARNING: the HMI class check could not run, so this unit's Java compatibility is unverified; continuing. If Android Auto stops working, roll back."
+    return 0
+}
+[[ -n "$BIN_SEARCH" ]] && lsd_jar_tail
+# The JXE is searched in full, with grep only (awk is too slow on a file
+# that size).
+JXE_SEARCHED=0
+case "$BIN_SEARCH" in grep*) [[ -f "$LSD_JXE" ]] && JXE_SEARCHED=1 ;; esac
+SEARCHED="lsd/jars"
+[[ -n "$LSD_TAIL" ]] && SEARCHED="lsd/lsd.jar, $SEARCHED"
+[[ $JXE_SEARCHED -eq 1 ]] && SEARCHED="/ifs/lsd.jxe, $SEARCHED"
+
+# find_stock_class CLASS (slash form, no .class): prints where it was found,
+# returns 0 found, 1 not found, 2 skipped.
+find_stock_class() {
+    typeset hits j
+    [[ -n "$BIN_SEARCH" ]] || return 2
+    hits=""
+    if [[ -n "$LSD_TAIL" ]]; then
+        bin_search "$1.class" "$LSD_TAIL" && hits="$hits lsd/lsd.jar"
+    fi
+    if [[ $JXE_SEARCHED -eq 1 ]]; then
+        bin_search "$1" "$LSD_JXE" && hits="$hits /ifs/lsd.jxe"
+    fi
+    for j in "$JAR_DIR"/*.jar "$JAR_DIR"/*/*.jar; do
+        [[ -f "$j" ]] || continue
+        case "$j" in */ClusterIntegration_*|*/AndroidAutoCluster_*) continue ;; esac
+        bin_search "$1.class" "$j" && hits="$hits lsd/jars/${j#$JAR_DIR/}"
+    done
+    print -r -- "${hits# }"
+    [[ -n "$hits" ]] && return 0
+    return 1
+}
+AA_CLS=de/audi/app/terminalmode/smartphone/androidauto2/AndroidAuto2Subsystem
+SM_CLS=de/audi/app/car/adi/legacy/sportchrono/StorageMountHandler
+aa_where="$(find_stock_class "$AA_CLS")"; aa_rc=$?
+sm_where="$(find_stock_class "$SM_CLS")"; sm_rc=$?
+case $aa_rc in
+    0) print "stock AA class:    AndroidAuto2Subsystem found in: $aa_where" ;;
+    1) print "stock AA class:    AndroidAuto2Subsystem NOT found in $SEARCHED (the search cannot see this unit's class image; report this with the ModKit log)" ;;
+    *) print "stock AA class:    skipped" ;;
+esac
+case $sm_rc in
+    0) print "hmi class check:   StorageMountHandler found in: $sm_where" ;;
+    1) print "hmi class check:   StorageMountHandler NOT found in $SEARCHED" ;;
+    *) print "hmi class check:   skipped" ;;
+esac
+# The stock subsystem is the control: when it is not seen either, a
+# negative result says nothing about the image and is treated as unknown.
+if [[ $sm_rc -eq 1 && $aa_rc -ne 0 ]]; then
+    print "hmi class check:   control class not found either, so this result is unreliable (treated as unknown)"
+    sm_rc=2
+fi
+# A hit only in the JXE (searched by bare name, which a mere reference to
+# the class also matches) while lsd.jar was searched and does not list the
+# class is contradictory; treated as unknown so the stand-in stays.
+if [[ $sm_rc -eq 0 && -n "$LSD_TAIL" && "$sm_where" == "/ifs/lsd.jxe" ]]; then
+    print "hmi class check:   only /ifs/lsd.jxe matched (a reference matches too) while lsd/lsd.jar does not list the class; treated as unknown"
+    sm_rc=2
+fi
+
+# Stand-in for StorageMountHandler (Audi only). Installed to $JAR_DIR, which
+# lsd.sh puts on the boot class path ahead of lsd.jxe, so it is used only
+# when no earlier entry provides the class; a real class in a plugin jar
+# ahead of it would still win, and shadowing the JXE copy loses nothing the
+# mod needs.
+STUB_SRC="$MOD_PATH/audi/ClusterIntegration_StorageMountHandler_stub.jar"
+STUB_DST="$JAR_DIR/${STUB_SRC##*/}"
+INSTALL_STUB=0
+if [[ "$OEM" == "AU" ]]; then
+    if [[ -e "$MOD_ROOT/no_stub.txt" ]]; then
+        print "stand-in class:    OFF (no_stub.txt present)"
+    elif [[ $sm_rc -eq 0 ]]; then
+        print "stand-in class:    not needed (this HMI image provides StorageMountHandler)"
+    elif [[ ! -f "$STUB_SRC" ]]; then
+        if [[ -f "$STUB_DST" ]]; then
+            INSTALL_STUB=2
+            print "stand-in class:    kept (${STUB_DST##*/} is already installed; the card has no audi/ folder to refresh it from)"
+        else
+            print -u2 "ERROR: $STUB_SRC not found and no stand-in is installed on this unit. Aborting before any change."
+            print -u2 "       The shadowed AndroidAuto2Subsystem needs StorageMountHandler, which this HMI image was not seen to provide; without"
+            print -u2 "       the stand-in jar Android Auto would stop working. Extract the Audi zip to an empty card (its Update/audi/ folder"
+            print -u2 "       carries the jar), or create Mods/ClusterIntegration/no_stub.txt if you know the class exists on this unit."
+            [[ -n "$LSD_TAIL" && "$LSD_TAIL" != "$LSD_DIR/lsd.jar" ]] && rm -f "$LSD_TAIL"
+            exit 4
+        fi
+    else
+        INSTALL_STUB=1
+        if [[ $sm_rc -eq 1 ]]; then
+            print "stand-in class:    ON (StorageMountHandler is not in this HMI image; ${STUB_SRC##*/} provides a no-op copy)"
+        else
+            print "stand-in class:    ON (presence of StorageMountHandler could not be checked; installed by default on Audi, create Mods/ClusterIntegration/no_stub.txt to skip it)"
+        fi
+    fi
+elif [[ $sm_rc -eq 1 ]]; then
+    print "WARNING: StorageMountHandler not found in this HMI image (OEM=$OEM); the mod's AndroidAuto2Subsystem needs it and the stand-in is only installed on Audi. Continuing (rollback is available)."
 fi
 
 BACKUP_DIR="$MOD_PATH/Backup"
-mkdir -p "$BACKUP_DIR" || { print -u2 "ERROR: cannot mkdir $BACKUP_DIR"; exit 2; }
+mkdir -p "$BACKUP_DIR" || {
+    print -u2 "ERROR: cannot mkdir $BACKUP_DIR"
+    [[ -n "$LSD_TAIL" && "$LSD_TAIL" != "$LSD_DIR/lsd.jar" ]] && rm -f "$LSD_TAIL"
+    exit 2
+}
 mkdir -p "$CLUSTER_DIR"
 
 ts() { date +"%Y%m%d_%H%M%S"; }
@@ -273,20 +470,6 @@ for proc in cluster gal gal.real dio_manager dio_manager.real; do
 done
 print ""
 
-files_identical() {
-    [[ -f "$1" && -f "$2" ]] || return 1
-    sz1=$(wc -c < "$1" 2>/dev/null | awk '{print $1}')
-    sz2=$(wc -c < "$2" 2>/dev/null | awk '{print $1}')
-    [[ -n "$sz1" && "$sz1" = "$sz2" ]] || return 1
-    s1=$(sum < "$1" 2>/dev/null)
-    s2=$(sum < "$2" 2>/dev/null)
-    if [[ -n "$s1" && -n "$s2" ]]; then
-        [[ "$s1" = "$s2" ]]
-    else
-        return 0
-    fi
-}
-
 # cmp first; if identical skip. Otherwise backup any existing DST and copy.
 install_file() {
     src="$1"; dst="$2"
@@ -294,15 +477,21 @@ install_file() {
         print "missing source:    $src"
         return 1
     fi
-    if files_identical "$src" "$dst"; then
+    files_identical "$src" "$dst"
+    if [[ $? -eq 0 ]]; then
         print "skip identical:    $dst"
         return 0
     fi
     if [[ -f "$dst" ]]; then
         bk="$BACKUP_DIR/${dst##*/}.backup.$(ts)"
         cp -p "$dst" "$bk" || { print -u2 "ERROR: backup failed: $dst"; return 2; }
-        # Never overwrite a file whose backup is not a verified copy.
-        files_identical "$dst" "$bk" || { print -u2 "ERROR: backup verify failed: $bk"; rm -f "$bk"; return 2; }
+        # Never overwrite a file whose backup is not a verified copy (the
+        # size must match; the content too when this unit can compare it).
+        files_identical "$dst" "$bk"
+        vrc=$?
+        [[ $vrc -eq 1 ]] && { print -u2 "ERROR: backup verify failed: $bk"; rm -f "$bk"; return 2; }
+        [[ $vrc -eq 2 ]] && print "backup verified:   by size only (no content comparison tool on this unit)"
+        [[ $vrc -eq 0 && "$FILE_CMP" == wc ]] && print "backup verified:   by size, line and word counts (no checksum tool on this unit)"
         print "backup target:     $dst -> $bk"
         note "replace $dst backup=$bk"
     else
@@ -338,7 +527,8 @@ swap_binary_for_wrapper() {
         bk="$BACKUP_DIR/${name}.original.$(ts)"
         cp -p "$dst_real" "$bk" && \
             print "backup .real (ts): $dst_real -> $bk"
-        if files_identical "$wrapper_src" "$dst_active"; then
+        files_identical "$wrapper_src" "$dst_active"
+        if [[ $? -eq 0 ]]; then
             print "skip identical:    $dst_active (wrapper already current)"
             return 0
         fi
@@ -358,24 +548,23 @@ swap_binary_for_wrapper() {
     # Timestamped historical backup (each run gets its own).
     bk="$BACKUP_DIR/${name}.original.$(ts)"
     cp -p "$dst_active" "$bk" || { print -u2 "ERROR: backup of original $name failed"; return 2; }
-    files_identical "$dst_active" "$bk" || { print -u2 "ERROR: backup verify failed: $bk"; rm -f "$bk"; return 2; }
+    files_identical "$dst_active" "$bk"
+    vrc=$?
+    [[ $vrc -eq 1 ]] && { print -u2 "ERROR: backup verify failed: $bk"; rm -f "$bk"; return 2; }
+    [[ $vrc -eq 2 ]] && print "backup verified:   by size only (no content comparison tool on this unit)"
+    [[ $vrc -eq 0 && "$FILE_CMP" == wc ]] && print "backup verified:   by size, line and word counts (no checksum tool on this unit)"
     print "backup original:   $dst_active -> $bk"
     # Stable-name local backup (always reflects the original binary content).
     cp -p "$dst_active" "$local_real_backup" && \
         print "backup .real:      $dst_active -> $local_real_backup"
-    files_identical "$dst_active" "$local_real_backup" || { print -u2 "ERROR: backup verify failed: $local_real_backup"; return 2; }
+    files_identical "$dst_active" "$local_real_backup"
+    [[ $? -eq 1 ]] && { print -u2 "ERROR: backup verify failed: $local_real_backup"; return 2; }
     mv "$dst_active" "$dst_real" || { print -u2 "ERROR: mv $name -> $name.real failed"; return 3; }
     print "preserve original: $dst_active -> $dst_real"
     note "swap $dst_active original=$dst_real backup=$bk"
     cp -p "$wrapper_src" "$dst_active" || { print -u2 "ERROR: install wrapper failed"; return 4; }
     chmod 755 "$dst_active"
     print "install wrapper:   $dst_active"
-}
-
-NEW_JAR="$(ls -1t "$MOD_PATH"/ClusterIntegration_*.jar 2>/dev/null | head -1)"
-[[ -z "$NEW_JAR" || ! -f "$NEW_JAR" ]] && {
-    print -u2 "ERROR: no ClusterIntegration_*.jar in $MOD_PATH"
-    exit 3
 }
 
 # Java classes: on Audi without enable_carplay.txt install the Android-Auto-
@@ -391,16 +580,27 @@ else
     print "java classes:      full JAR (${NEW_JAR##*/})"
 fi
 
-# Remove any older versions of our jar so only the new one remains.
+# Remove any older versions of our jar so only the new one remains (the
+# stand-in jar is handled separately below).
 typeset j
 for j in "$JAR_DIR"/ClusterIntegration_* "$JAR_DIR"/AndroidAutoCluster_*; do
-    if [[ -f "$j" && "${j##*/}" != "${NEW_JAR##*/}" ]]; then
+    if [[ -f "$j" && "${j##*/}" != "${NEW_JAR##*/}" && "${j##*/}" != "${STUB_DST##*/}" ]]; then
         bk="$BACKUP_DIR/${j##*/}.backup.$(ts)"
         cp -p "$j" "$bk" && rm -f "$j" && print "remove old jar:    $j -> $bk" && note "remove $j backup=$bk"
     fi
 done
 
 install_file "$NEW_JAR"                  "$JAR_DIR/${NEW_JAR##*/}"
+if [[ $INSTALL_STUB -eq 1 ]]; then
+    install_file "$STUB_SRC" "$STUB_DST"
+elif [[ $INSTALL_STUB -eq 0 && -f "$STUB_DST" ]]; then
+    bk="$BACKUP_DIR/${STUB_DST##*/}.backup.$(ts)"
+    if cp -p "$STUB_DST" "$bk"; then
+        rm -f "$STUB_DST" && print "remove stand-in:   $STUB_DST -> $bk" && note "remove $STUB_DST backup=$bk"
+    else
+        print -u2 "ERROR: could not back up $STUB_DST to $bk; stand-in left in place"
+    fi
+fi
 install_file "$MOD_PATH/cluster"         "$CLUSTER_DIR/cluster"
 install_file "$MOD_PATH/gal_cluster.so"  "$CLUSTER_DIR/gal_cluster.so"
 install_file "$MOD_PATH/dio_cluster.so"  "$CLUSTER_DIR/dio_cluster.so"
@@ -418,20 +618,27 @@ chmod 755 "$CLUSTER_DIR/dio_cluster.so" 2>/dev/null
 chmod 644 "$CLUSTER_DIR/cluster_config.json" 2>/dev/null
 
 # apply_override KEY VALUE: set KEY in the top-level "config" block of the
-# installed cluster_config.json. Only a key that starts its own line inside
-# that block is touched (nested mirror / gal_h264 objects are written inline
-# and are skipped, as are carConfig, dynamicThresholds and countries). The
-# shipped file has CRLF line endings; they are dropped on rewrite so the
-# block tracking and the JSON stay consistent. Returns 1 if the key was not
-# found as a scalar in the config block (file unchanged).
+# installed cluster_config.json. A plain KEY must start its own line inside
+# that block (scalars such as forceRHD). BLOCK.KEY (mirror.mode,
+# gal_h264.codecRes, gal_h264.zoomY, ...) sets a scalar inside the inline
+# "mirror" / "gal_h264" object of the config block, which is what the
+# readers use when carConfig has no entry for the car. carConfig,
+# dynamicThresholds and countries are never touched. The shipped file has
+# CRLF line endings; they are dropped on rewrite so the block tracking and
+# the JSON stay consistent. Returns 1 if the key was not found (file
+# unchanged).
 apply_override() {
-    typeset cfg
+    typeset cfg blk key
     cfg="$CLUSTER_DIR/cluster_config.json"
-    if awk -v key="$1" -v val="$2" '
+    case "$1" in
+        *.*) blk="${1%%.*}"; key="${1#*.}" ;;
+        *)   blk=""; key="$1" ;;
+    esac
+    if awk -v blk="$blk" -v key="$1" -v sub_key="$key" -v val="$2" '
         BEGIN { inblk = 0; done = 0 }
         { sub(/\r$/, "") }
         /^[ \t]*"config"[ \t]*:[ \t]*\{[ \t]*$/ { inblk = 1 }
-        inblk && !done {
+        inblk && !done && blk == "" {
             pat = "^[ \t]*\"" key "\"[ \t]*:[ \t]*"
             if (match($0, pat)) {
                 rest = substr($0, RLENGTH + 1)
@@ -440,6 +647,20 @@ apply_override() {
                     sub(/^[^,]*/, "", tail)
                     $0 = substr($0, 1, RLENGTH) val tail
                     done = 1
+                }
+            }
+        }
+        inblk && !done && blk != "" {
+            pat = "^[ \t]*\"" blk "\"[ \t]*:[ \t]*[{]"
+            if (match($0, pat)) {
+                pat2 = "\"" sub_key "\"[ \t]*:[ \t]*"
+                if (match($0, pat2)) {
+                    pre = substr($0, 1, RSTART + RLENGTH - 1)
+                    rest = substr($0, RSTART + RLENGTH)
+                    if (rest !~ /^[\[{]/ && match(rest, /[,}]/)) {
+                        $0 = pre val substr(rest, RSTART)
+                        done = 1
+                    }
                 }
             }
         }
@@ -469,6 +690,10 @@ if [[ -f "$OVERRIDES" ]]; then
         k="$(print -r -- "$k" | sed -e 's/^[ 	]*//' -e 's/[ 	]*$//')"
         v="$(print -r -- "$v" | sed -e 's/^[ 	]*//' -e 's/[ 	]*$//')"
         [[ -z "$k" || -z "$v" ]] && continue
+        case "$k" in
+            +([A-Za-z0-9_])|+([A-Za-z0-9_]).+([A-Za-z0-9_])) ;;
+            *) print "config override:   WARN '$k' is not a key name (letters, digits, _ and one dot), ignored"; continue ;;
+        esac
         # value must be a JSON scalar: true, false, a number, or a quoted string
         vok=0
         case "$v" in
@@ -487,9 +712,32 @@ if [[ -f "$OVERRIDES" ]]; then
             print "config override:   $k = $v"
             note "override $CLUSTER_DIR/cluster_config.json $k=$v"
         else
-            print "config override:   WARN '$k' is not a scalar key of the config block, ignored"
+            print "config override:   WARN '$k' is not a scalar key of the config block (or of its mirror / gal_h264 object), ignored"
         fi
     done
+fi
+
+# Environment for the Android Auto hook. Mods/ClusterIntegration/gal_env.txt
+# on the SD card holds GAL_CLUSTER_*=value lines (insets in codec-frame
+# pixels, GAL_CLUSTER_LOG=1 for live logging, ...); the installer copies the
+# valid lines to $CLUSTER_DIR/gal_env and the gal wrapper exports them before
+# starting gal.real. Without the file an installed gal_env is removed.
+GAL_ENV_SRC="$MOD_ROOT/gal_env.txt"
+GAL_ENV_DST="$CLUSTER_DIR/gal_env"
+if [[ -f "$GAL_ENV_SRC" ]]; then
+    awk '{ sub(/\r$/, ""); sub(/[ \t]*#.*$/, ""); gsub(/^[ \t]+|[ \t]+$/, "") }
+         /^GAL_CLUSTER_[A-Z0-9_]+=[A-Za-z0-9_.:\/-]*$/ { print; n++ }
+         END { exit (n > 0 ? 0 : 1) }' "$GAL_ENV_SRC" > "/tmp/cluster_gal_env.$$" 2>/dev/null
+    if [[ -s "/tmp/cluster_gal_env.$$" ]]; then
+        install_file "/tmp/cluster_gal_env.$$" "$GAL_ENV_DST" && chmod 644 "$GAL_ENV_DST" 2>/dev/null
+        awk '{ printf "gal env:           %s\n", $0 }' "$GAL_ENV_DST"
+    else
+        print "gal env:           WARN gal_env.txt has no valid GAL_CLUSTER_NAME=value line, ignored"
+    fi
+    rm -f "/tmp/cluster_gal_env.$$"
+elif [[ -f "$GAL_ENV_DST" ]]; then
+    bk="$BACKUP_DIR/gal_env.backup.$(ts)"
+    cp -p "$GAL_ENV_DST" "$bk" && rm -f "$GAL_ENV_DST" && print "remove gal env:    $GAL_ENV_DST -> $bk" && note "remove $GAL_ENV_DST backup=$bk"
 fi
 
 swap_binary_for_wrapper gal
@@ -539,24 +787,29 @@ if [[ -e "$MOD_ROOT/diag.txt" ]]; then
         print "diag mode:         WARN could not set enableMapRender=false in cluster_config.json; video path left enabled"
     fi
     print "diag mode:         ON  ($DIAG_MARKER) - hook logs only, cluster service NOT injected"
-    # Stage the stock HMI jars that contain the classes this mod shadows, so
-    # constructor signatures can be compared on a PC with javap
-    # (modkit/check_hmi_signatures.sh) before going live.
+    # Stage the small stock jars that contain the classes this mod shadows,
+    # so constructor signatures can be compared on a PC with javap
+    # (modkit/check_hmi_signatures.sh) before going live. lsd.jar is too
+    # big to copy here; its location is printed instead.
     REF_DIR="$BACKUP_DIR/hmi_reference"
     mkdir -p "$REF_DIR" 2>/dev/null
-    typeset refcls refjar refn
-    refn=0
-    for refcls in \
-        de/audi/app/terminalmode/smartphone/androidauto2/AndroidAuto2Subsystem.class \
-        de/audi/app/terminalmode/smartphone/carplay/CarPlayDSIManager.class \
-    ; do
-        jars_containing "$refcls" | while read refjar; do
-            if [[ ! -f "$REF_DIR/${refjar##*/}" ]]; then
-                cp -p "$refjar" "$REF_DIR/${refjar##*/}" && print "hmi reference:     ${refjar##*/} -> Backup/hmi_reference/ (contains ${refcls##*/})"
-            fi
-        done
+    typeset refjar refn w cp_where
+    cp_where="$(find_stock_class de/audi/app/terminalmode/smartphone/carplay/CarPlayDSIManager)"
+    for w in $aa_where $cp_where; do
+        case "$w" in
+            lsd/jars/*)
+                refjar="$JAR_DIR/${w#lsd/jars/}"
+                if [[ -f "$refjar" && ! -f "$REF_DIR/${refjar##*/}" ]]; then
+                    cp -p "$refjar" "$REF_DIR/${refjar##*/}" && print "hmi reference:     ${refjar##*/} -> Backup/hmi_reference/"
+                fi
+                ;;
+            lsd/lsd.jar)
+                print "hmi reference:     the shadowed classes are in $LSD_DIR/lsd.jar ($(file_size "$LSD_DIR/lsd.jar") bytes, not copied); copy it to the card over SSH for modkit/check_hmi_signatures.sh"
+                ;;
+        esac
     done
-    refn="$(ls -1 "$REF_DIR" 2>/dev/null | wc -l | awk '{print $1}')"
+    refn=0
+    for refjar in "$REF_DIR"/*; do [[ -f "$refjar" ]] && refn=$((refn + 1)); done
     print "hmi reference:     $refn stock jar(s) staged for modkit/check_hmi_signatures.sh"
 else
     if [[ -f "$DIAG_MARKER" ]]; then
@@ -572,9 +825,9 @@ fi
 # pass-through (cluster stays blank), never a crash. Object layouts cannot
 # be checked here. Output goes to the ModKit log for the first-boot review.
 check_hook_symbols() {
-    typeset lib sym present missing found cand
-    if ! have grep; then
-        print "hook symbols:      skipped (grep is not available on this unit)"
+    typeset lib sym present missing cand
+    if [[ -z "$BIN_SEARCH" ]]; then
+        print "hook symbols:      skipped (no command on this unit finds a name inside a binary file)"
         return 0
     fi
     lib=""
@@ -607,31 +860,9 @@ check_hook_symbols() {
         _ZN24NavigationStatusEndpoint4stopEv \
         _ZN24NavigationStatusEndpoint5startEv \
         _ZN27NavFocusRequestNotification27MergePartialFromCodedStreamEPN6google8protobuf2io16CodedInputStreamE
-    # One pass over the library: print every matching symbol name (-o), then
-    # compare against the list. Falls back to one grep per symbol if -o is
-    # not supported.
-    typeset symtmp symrc
-    symtmp="/tmp/cluster_symcheck.$$"
-    grep $GREP_A -o \
-        -e "${HOOK_SYMS[0]}" -e "${HOOK_SYMS[1]}" -e "${HOOK_SYMS[2]}" -e "${HOOK_SYMS[3]}" \
-        -e "${HOOK_SYMS[4]}" -e "${HOOK_SYMS[5]}" -e "${HOOK_SYMS[6]}" -e "${HOOK_SYMS[7]}" \
-        -e "${HOOK_SYMS[8]}" -e "${HOOK_SYMS[9]}" -e "${HOOK_SYMS[10]}" -e "${HOOK_SYMS[11]}" \
-        -e "${HOOK_SYMS[12]}" -e "${HOOK_SYMS[13]}" "$lib" > "$symtmp" 2>/dev/null
-    symrc=$?
-    if [[ $symrc -le 1 ]]; then
-        found="$(awk '!seen[$0]++' "$symtmp" 2>/dev/null)"
-    else
-        # grep without -o support: one plain grep per symbol
-        found=""
-        for sym in "${HOOK_SYMS[@]}"; do
-            grep $GREP_A -q -- "$sym" "$lib" 2>/dev/null && found="$found
-$sym"
-        done
-    fi
-    rm -f "$symtmp"
     present=0; missing=""
     for sym in "${HOOK_SYMS[@]}"; do
-        if print -r -- "$found" | awk -v s="$sym" '$0 == s { f = 1 } END { exit !f }'; then
+        if bin_search "$sym" "$lib"; then
             present=$((present + 1))
         else
             missing="$missing $sym"
@@ -642,6 +873,7 @@ $sym"
     return 0
 }
 check_hook_symbols
+[[ -n "$LSD_TAIL" && "$LSD_TAIL" != "$LSD_DIR/lsd.jar" ]] && rm -f "$LSD_TAIL"
 
 sync
 print ""
