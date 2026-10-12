@@ -270,6 +270,18 @@ The daemon sizes its window to the cluster display it detects (1920x722 on the e
 
 `gal_env.txt` lines are copied to `/mnt/app/eso/bin/apps/cluster/gal_env` (recorded in the manifest) and exported by the `gal` wrapper before `gal.real` starts; `gal_env.example.txt` ships next to the overrides example. Re-run the installer after every change (it backs up and replaces the config, and `gal` has to restart to pick up the environment). The hook's own log (`GAL_CLUSTER_LOG=1`) shows what was negotiated: `insets: top=180 ... bottom=180` and `codec_res=3(1080p)` in the `sdresp:` line; the daemon's `cluster_daemon.log` shows `display size: 1920x722 (... auto=ok ...)` and `BeginSequence: 1920x1080`.
 
+### Iterating over SSH instead of rebooting
+
+With root SSH on the unit (LawPaul's `mh2p-ssh-access` mod) the card can stay in the slot and most changes apply without the ModKit boot cycle:
+
+1. Edit `Mods/ClusterIntegration/config_overrides.txt` or `gal_env.txt` on the card from the unit (`cat > /fs/sdb0/Mods/ClusterIntegration/gal_env.txt <<'EOF' ... EOF`), or on a PC.
+2. Run `ksh /fs/sdb0/Mods/ClusterIntegration/Update/reinstall.sh`. It is `install.sh` with the same gate, backups, manifest and marker files, so the log is the same as the ModKit's.
+3. The installer stops `gal` and the daemon. Reconnect the phone: the HMI starts a new `gal`, which reads the new `gal_env` and the new config, and `/tmp/gal_preload.log` shows the `gal env:` lines it exported. Restart the daemon by hand so the map comes back without a boot: `/mnt/app/eso/bin/apps/cluster/cluster daemon verbose=2 &`.
+
+A changed JAR (a new package) still needs a reboot, because the HMI loads it at start. `/tmp` is RAM, so copy the logs to the card before switching off.
+
+Emulating the head unit on a PC is not realistic: the HMI is a QNX 6.6 image for the unit's NVIDIA Tegra board (the QNX Screen compositor, the NvMedia H.264 decoder, the cluster LVDS link, the DSI middleware and the Android Auto receiver are all tied to that hardware and to the car's bus), there is no QEMU board support for it, and the pieces this mod exercises are exactly the hardware-bound ones. A full backup is worth having regardless: over SSH, `mount` lists the partitions (the app partition is `/dev/mnanda0t177.1`), and `ssh root@<unit> "dd if=/dev/mnanda0t177.1 bs=65536" > mnt_app.img` on a PC copies one (slow over the car's Wi-Fi; a USB stick in the unit, `/fs/usb0_0`, is faster but FAT32 caps a file at 4 GB, so split with `dd` `count=`/`skip=`). The mod's own changes are already backed up on the card by the installer.
+
 ### CarPlay on Audi
 
 Turn-by-turn from CarPlay needs the `dio_manager` hook, which is opt-in on Audi (`enable_carplay.txt`). Before enabling it, run a diagnostic-mode pass with it enabled: the wrapper exports `DIO_CLUSTER_LOG=1`, and the shipped hook writes `dio_cluster.log` to the SD card root with `IDENTIFY orig` / `IDENTIFY new` dumps and the phone's `ACCEPTED` / `REJECTED` answer. A rejected Identify on every connection means the Audi head unit already advertises route guidance or the layout differs; disable the hook by deleting `enable_carplay.txt` and running the installer again (it puts the stock `dio_manager` back) rather than leaving CarPlay broken. `uninstall.txt` removes the whole mod instead. The hook also only triggers on wireless CarPlay sessions hosted by `dio_manager` that stream location to the phone; wired sessions live in another process and never reach it. On an e-tron P2873 the Java side is already known not to fit (the full JAR's CarPlay classes do not link against that image, see the verification section), so until a JAR built against the Audi CarPlay classes exists this is Porsche-only in practice.
