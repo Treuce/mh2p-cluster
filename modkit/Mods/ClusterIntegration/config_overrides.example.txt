@@ -3,9 +3,11 @@
 # Copy this file to  Mods/ClusterIntegration/config_overrides.txt  (same
 # folder) and uncomment what you need. One  key=value  per line; the value is
 # written exactly as JSON (true / false / a number / "a string"). Keys are
-# looked up in the top-level "config" block of cluster_config.json; nested
-# objects (mirror, gal_h264) and carConfig entries are not touched. Re-running
-# the installer without config_overrides.txt reinstalls the shipped config.
+# looked up in the top-level "config" block of cluster_config.json; the
+# inline mirror and gal_h264 objects of that block are reached as
+# gal_h264.mode, mirror.zoomX and so on. carConfig entries are not touched.
+# Re-running the installer without config_overrides.txt reinstalls the
+# shipped config.
 #
 # Right-hand-drive car (UK, Ireland, Japan, Australia, ...): forces the
 # roundabout angle correction and Waze keep-lane side without relying on the
@@ -24,3 +26,18 @@
 #
 # Text only instead of text + bargraph if the virtual cockpit draws both badly.
 #bargraphMode="distance"
+
+# Video window of the Android Auto map on the cluster (the global gal_h264
+# object, used when carConfig has no entry for your car). BLOCK.KEY form.
+#   mode: letter (fit, black bars), fill (cover, crops top/bottom), stretch
+#   codecRes: 480, 720 or 1080 (the stream size asked from the phone)
+#   zoomX/zoomY > 1 enlarge (crop), panX/panY shift the visible part
+# e-tron (1920x722 cockpit, 16:9 stream): start with stretch, or fill with
+# the insets from gal_env.txt; see the README.
+#gal_h264.mode="stretch"
+#gal_h264.codecRes=720
+#gal_h264.zoomX=1.0
+#gal_h264.zoomY=1.0
+#gal_h264.panX=0.0
+#gal_h264.panY=0.0
+# Same keys for the mirror (screen-capture) path: mirror.mode, mirror.zoomX ...

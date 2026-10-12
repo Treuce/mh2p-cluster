@@ -21,6 +21,8 @@
 #     config_overrides.txt  key=value lines applied to the installed
 #                         cluster_config.json "config" block (e.g. forceRHD=true)
 #     no_stub.txt         Audi: do not install the StorageMountHandler stand-in
+#     gal_env.txt         GAL_CLUSTER_*=value lines exported to the Android
+#                         Auto hook by the gal wrapper (insets, live logging)
 #     uninstall.txt       ModKit convention: run uninstall.sh instead
 # - Copies JAR, cluster, gal_cluster.so, dio_cluster.so to their target dirs.
 # - On Audi also installs Update/audi/ClusterIntegration_StorageMountHandler_
@@ -581,20 +583,27 @@ chmod 755 "$CLUSTER_DIR/dio_cluster.so" 2>/dev/null
 chmod 644 "$CLUSTER_DIR/cluster_config.json" 2>/dev/null
 
 # apply_override KEY VALUE: set KEY in the top-level "config" block of the
-# installed cluster_config.json. Only a key that starts its own line inside
-# that block is touched (nested mirror / gal_h264 objects are written inline
-# and are skipped, as are carConfig, dynamicThresholds and countries). The
-# shipped file has CRLF line endings; they are dropped on rewrite so the
-# block tracking and the JSON stay consistent. Returns 1 if the key was not
-# found as a scalar in the config block (file unchanged).
+# installed cluster_config.json. A plain KEY must start its own line inside
+# that block (scalars such as forceRHD). BLOCK.KEY (mirror.mode,
+# gal_h264.codecRes, gal_h264.zoomY, ...) sets a scalar inside the inline
+# "mirror" / "gal_h264" object of the config block, which is what the
+# readers use when carConfig has no entry for the car. carConfig,
+# dynamicThresholds and countries are never touched. The shipped file has
+# CRLF line endings; they are dropped on rewrite so the block tracking and
+# the JSON stay consistent. Returns 1 if the key was not found (file
+# unchanged).
 apply_override() {
-    typeset cfg
+    typeset cfg blk key
     cfg="$CLUSTER_DIR/cluster_config.json"
-    if awk -v key="$1" -v val="$2" '
+    case "$1" in
+        *.*) blk="${1%%.*}"; key="${1#*.}" ;;
+        *)   blk=""; key="$1" ;;
+    esac
+    if awk -v blk="$blk" -v key="$1" -v sub_key="$key" -v val="$2" '
         BEGIN { inblk = 0; done = 0 }
         { sub(/\r$/, "") }
         /^[ \t]*"config"[ \t]*:[ \t]*\{[ \t]*$/ { inblk = 1 }
-        inblk && !done {
+        inblk && !done && blk == "" {
             pat = "^[ \t]*\"" key "\"[ \t]*:[ \t]*"
             if (match($0, pat)) {
                 rest = substr($0, RLENGTH + 1)
@@ -603,6 +612,20 @@ apply_override() {
                     sub(/^[^,]*/, "", tail)
                     $0 = substr($0, 1, RLENGTH) val tail
                     done = 1
+                }
+            }
+        }
+        inblk && !done && blk != "" {
+            pat = "^[ \t]*\"" blk "\"[ \t]*:[ \t]*\{"
+            if (match($0, pat)) {
+                pat2 = "\"" sub_key "\"[ \t]*:[ \t]*"
+                if (match($0, pat2)) {
+                    pre = substr($0, 1, RSTART + RLENGTH - 1)
+                    rest = substr($0, RSTART + RLENGTH)
+                    if (rest !~ /^[\[{]/ && match(rest, /[,}]/)) {
+                        $0 = pre val substr(rest, RSTART)
+                        done = 1
+                    }
                 }
             }
         }
@@ -632,6 +655,10 @@ if [[ -f "$OVERRIDES" ]]; then
         k="$(print -r -- "$k" | sed -e 's/^[ 	]*//' -e 's/[ 	]*$//')"
         v="$(print -r -- "$v" | sed -e 's/^[ 	]*//' -e 's/[ 	]*$//')"
         [[ -z "$k" || -z "$v" ]] && continue
+        case "$k" in
+            +([A-Za-z0-9_])|+([A-Za-z0-9_]).+([A-Za-z0-9_])) ;;
+            *) print "config override:   WARN '$k' is not a key name (letters, digits, _ and one dot), ignored"; continue ;;
+        esac
         # value must be a JSON scalar: true, false, a number, or a quoted string
         vok=0
         case "$v" in
@@ -650,9 +677,32 @@ if [[ -f "$OVERRIDES" ]]; then
             print "config override:   $k = $v"
             note "override $CLUSTER_DIR/cluster_config.json $k=$v"
         else
-            print "config override:   WARN '$k' is not a scalar key of the config block, ignored"
+            print "config override:   WARN '$k' is not a scalar key of the config block (or of its mirror / gal_h264 object), ignored"
         fi
     done
+fi
+
+# Environment for the Android Auto hook. Mods/ClusterIntegration/gal_env.txt
+# on the SD card holds GAL_CLUSTER_*=value lines (insets in codec-frame
+# pixels, GAL_CLUSTER_LOG=1 for live logging, ...); the installer copies the
+# valid lines to $CLUSTER_DIR/gal_env and the gal wrapper exports them before
+# starting gal.real. Without the file an installed gal_env is removed.
+GAL_ENV_SRC="$MOD_ROOT/gal_env.txt"
+GAL_ENV_DST="$CLUSTER_DIR/gal_env"
+if [[ -f "$GAL_ENV_SRC" ]]; then
+    awk '{ sub(/\r$/, ""); sub(/[ \t]*#.*$/, ""); gsub(/^[ \t]+|[ \t]+$/, "") }
+         /^GAL_CLUSTER_[A-Z0-9_]+=[A-Za-z0-9_.:\/-]*$/ { print; n++ }
+         END { exit (n > 0 ? 0 : 1) }' "$GAL_ENV_SRC" > "/tmp/cluster_gal_env.$$" 2>/dev/null
+    if [[ -s "/tmp/cluster_gal_env.$$" ]]; then
+        install_file "/tmp/cluster_gal_env.$$" "$GAL_ENV_DST" && chmod 644 "$GAL_ENV_DST" 2>/dev/null
+        awk '{ printf "gal env:           %s\n", $0 }' "$GAL_ENV_DST"
+    else
+        print "gal env:           WARN gal_env.txt has no valid GAL_CLUSTER_NAME=value line, ignored"
+    fi
+    rm -f "/tmp/cluster_gal_env.$$"
+elif [[ -f "$GAL_ENV_DST" ]]; then
+    bk="$BACKUP_DIR/gal_env.backup.$(ts)"
+    cp -p "$GAL_ENV_DST" "$bk" && rm -f "$GAL_ENV_DST" && print "remove gal env:    $GAL_ENV_DST -> $bk" && note "remove $GAL_ENV_DST backup=$bk"
 fi
 
 swap_binary_for_wrapper gal
