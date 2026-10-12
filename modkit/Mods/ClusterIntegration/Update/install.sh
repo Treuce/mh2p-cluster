@@ -395,6 +395,13 @@ if [[ $sm_rc -eq 1 && $aa_rc -ne 0 ]]; then
     print "hmi class check:   control class not found either, so this result is unreliable (treated as unknown)"
     sm_rc=2
 fi
+# A hit only in the JXE (searched by bare name, which a mere reference to
+# the class also matches) while lsd.jar was searched and does not list the
+# class is contradictory; treated as unknown so the stand-in stays.
+if [[ $sm_rc -eq 0 && -n "$LSD_TAIL" && "$sm_where" == "/ifs/lsd.jxe" ]]; then
+    print "hmi class check:   only /ifs/lsd.jxe matched (a reference matches too) while lsd/lsd.jar does not list the class; treated as unknown"
+    sm_rc=2
+fi
 
 # Stand-in for StorageMountHandler (Audi only). Installed to $JAR_DIR, which
 # lsd.sh puts on the boot class path ahead of lsd.jxe, so it is used only
@@ -414,7 +421,12 @@ if [[ "$OEM" == "AU" ]]; then
             INSTALL_STUB=2
             print "stand-in class:    kept (${STUB_DST##*/} is already installed; the card has no audi/ folder to refresh it from)"
         else
-            print "WARN: $STUB_SRC is missing; the shadowed AndroidAuto2Subsystem needs StorageMountHandler and this unit was not seen to provide it. Use the Audi package."
+            print -u2 "ERROR: $STUB_SRC not found and no stand-in is installed on this unit. Aborting before any change."
+            print -u2 "       The shadowed AndroidAuto2Subsystem needs StorageMountHandler, which this HMI image was not seen to provide; without"
+            print -u2 "       the stand-in jar Android Auto would stop working. Extract the Audi zip to an empty card (its Update/audi/ folder"
+            print -u2 "       carries the jar), or create Mods/ClusterIntegration/no_stub.txt if you know the class exists on this unit."
+            [[ -n "$LSD_TAIL" && "$LSD_TAIL" != "$LSD_DIR/lsd.jar" ]] && rm -f "$LSD_TAIL"
+            exit 4
         fi
     else
         INSTALL_STUB=1
@@ -583,7 +595,11 @@ if [[ $INSTALL_STUB -eq 1 ]]; then
     install_file "$STUB_SRC" "$STUB_DST"
 elif [[ $INSTALL_STUB -eq 0 && -f "$STUB_DST" ]]; then
     bk="$BACKUP_DIR/${STUB_DST##*/}.backup.$(ts)"
-    cp -p "$STUB_DST" "$bk" && rm -f "$STUB_DST" && print "remove stand-in:   $STUB_DST -> $bk" && note "remove $STUB_DST backup=$bk"
+    if cp -p "$STUB_DST" "$bk"; then
+        rm -f "$STUB_DST" && print "remove stand-in:   $STUB_DST -> $bk" && note "remove $STUB_DST backup=$bk"
+    else
+        print -u2 "ERROR: could not back up $STUB_DST to $bk; stand-in left in place"
+    fi
 fi
 install_file "$MOD_PATH/cluster"         "$CLUSTER_DIR/cluster"
 install_file "$MOD_PATH/gal_cluster.so"  "$CLUSTER_DIR/gal_cluster.so"
