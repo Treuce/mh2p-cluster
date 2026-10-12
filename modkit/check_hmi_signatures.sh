@@ -58,10 +58,12 @@ mod_entries="$(unzip -Z1 "$MOD_JAR")"
 # images do not (verified on an e-tron P2873); the installer then adds the
 # stand-in jar from Update/audi/.
 SM=de/audi/app/car/adi/legacy/sportchrono/StorageMountHandler.class
+# The mod's own jars (ClusterIntegration_*, including the stand-in jar under
+# Update/audi/) are never stock, even when REF_DIR is the whole card.
 sm_jar=""
 while IFS= read -r -d '' j; do
   if unzip -Z1 "$j" 2>/dev/null | grep -qx "$SM"; then sm_jar="$j"; break; fi
-done < <(find "$REF_DIR" -name '*.jar' -print0 | sort -z)
+done < <(find "$REF_DIR" -name '*.jar' ! -name 'ClusterIntegration_*' ! -name 'AndroidAutoCluster_*' -print0 | sort -z)
 if [[ -n "$sm_jar" ]]; then
   echo "PRESENT  ${SM%.class} in ${sm_jar##*/} (the stand-in jar is not needed on this unit)"
 else
@@ -75,7 +77,7 @@ for cls in "${SHADOWED[@]}"; do
   ref_jar=""
   while IFS= read -r -d '' j; do
     if unzip -Z1 "$j" 2>/dev/null | grep -qx "$cls.class"; then ref_jar="$j"; break; fi
-  done < <(find "$REF_DIR" -name '*.jar' -print0 | sort -z)
+  done < <(find "$REF_DIR" -name '*.jar' ! -name 'ClusterIntegration_*' ! -name 'AndroidAutoCluster_*' -print0 | sort -z)
   if [[ -z "$ref_jar" ]]; then
     echo "MISSING  $cls not found in any jar under $REF_DIR"
     rc=1; continue

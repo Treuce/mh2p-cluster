@@ -29,7 +29,9 @@
 #   stub.jar, a no-op copy of a Porsche-only class the mod's Java code
 #   constructs, unless the HMI image is seen to provide the class or
 #   no_stub.txt exists.
-# - Skips copies when the target file is byte-identical to the source.
+# - Skips copies when the target file is identical to the source (by
+#   content where the unit has a comparison tool, else by size, wc counts
+#   and modification time).
 # - Backs up any existing target before overwriting (timestamped, into
 #   $MOD_PATH/Backup/).
 # - Replaces /mnt/app/eso/bin/apps/gal with a wrapper script that sets
@@ -119,8 +121,12 @@ file_cmp_probe() {
     rm -f "$a" "$b"
 }
 file_cmp_probe
-# 0 = identical (size and content), 1 = different, 2 = same size but the
-# content cannot be compared on this unit.
+# 0 = identical, 1 = different, 2 = same size but the content cannot be
+# compared on this unit. With a real comparator the content decides. With
+# only the wc fingerprint (counts, not a checksum: a same-length edit such
+# as 2000 -> 3000 keeps it) the two files must also carry the same
+# modification time: every copy here is cp -p, so an unchanged file keeps
+# the card file's time and anything new on the card has another.
 files_identical() {
     typeset sz1 sz2
     [[ -f "$1" && -f "$2" ]] || return 1
@@ -128,7 +134,11 @@ files_identical() {
     [[ -n "$sz1" && -n "$sz2" && "$sz1" == "$sz2" ]] || return 1
     [[ -n "$FILE_CMP" ]] || return 2
     same_content_with "$FILE_CMP" "$1" "$2"
-    case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
+    case $? in 0) ;; 1) return 1 ;; *) return 2 ;; esac
+    if [[ "$FILE_CMP" == wc ]]; then
+        [[ "$1" -nt "$2" || "$1" -ot "$2" ]] && return 1
+    fi
+    return 0
 }
 
 # ex: MH2p_US_PO416_P2870 (Porsche), MH2p_ER_AUG35_P2873 (Audi e-tron),
@@ -400,7 +410,12 @@ if [[ "$OEM" == "AU" ]]; then
     elif [[ $sm_rc -eq 0 ]]; then
         print "stand-in class:    not needed (this HMI image provides StorageMountHandler)"
     elif [[ ! -f "$STUB_SRC" ]]; then
-        print "WARN: $STUB_SRC is missing; the shadowed AndroidAuto2Subsystem needs StorageMountHandler and this unit was not seen to provide it. Use the Audi package."
+        if [[ -f "$STUB_DST" ]]; then
+            INSTALL_STUB=2
+            print "stand-in class:    kept (${STUB_DST##*/} is already installed; the card has no audi/ folder to refresh it from)"
+        else
+            print "WARN: $STUB_SRC is missing; the shadowed AndroidAuto2Subsystem needs StorageMountHandler and this unit was not seen to provide it. Use the Audi package."
+        fi
     else
         INSTALL_STUB=1
         if [[ $sm_rc -eq 1 ]]; then
@@ -410,11 +425,15 @@ if [[ "$OEM" == "AU" ]]; then
         fi
     fi
 elif [[ $sm_rc -eq 1 ]]; then
-    print "WARNING: StorageMountHandler not found in this Porsche HMI image; the mod's AndroidAuto2Subsystem needs it. Continuing (rollback is available)."
+    print "WARNING: StorageMountHandler not found in this HMI image (OEM=$OEM); the mod's AndroidAuto2Subsystem needs it and the stand-in is only installed on Audi. Continuing (rollback is available)."
 fi
 
 BACKUP_DIR="$MOD_PATH/Backup"
-mkdir -p "$BACKUP_DIR" || { print -u2 "ERROR: cannot mkdir $BACKUP_DIR"; exit 2; }
+mkdir -p "$BACKUP_DIR" || {
+    print -u2 "ERROR: cannot mkdir $BACKUP_DIR"
+    [[ -n "$LSD_TAIL" && "$LSD_TAIL" != "$LSD_DIR/lsd.jar" ]] && rm -f "$LSD_TAIL"
+    exit 2
+}
 mkdir -p "$CLUSTER_DIR"
 
 ts() { date +"%Y%m%d_%H%M%S"; }
@@ -562,7 +581,7 @@ done
 install_file "$NEW_JAR"                  "$JAR_DIR/${NEW_JAR##*/}"
 if [[ $INSTALL_STUB -eq 1 ]]; then
     install_file "$STUB_SRC" "$STUB_DST"
-elif [[ -f "$STUB_DST" ]]; then
+elif [[ $INSTALL_STUB -eq 0 && -f "$STUB_DST" ]]; then
     bk="$BACKUP_DIR/${STUB_DST##*/}.backup.$(ts)"
     cp -p "$STUB_DST" "$bk" && rm -f "$STUB_DST" && print "remove stand-in:   $STUB_DST -> $bk" && note "remove $STUB_DST backup=$bk"
 fi
