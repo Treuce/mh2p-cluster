@@ -121,24 +121,32 @@ file_cmp_probe() {
     rm -f "$a" "$b"
 }
 file_cmp_probe
-# 0 = identical, 1 = different, 2 = same size but the content cannot be
-# compared on this unit. With a real comparator the content decides. With
-# only the wc fingerprint (counts, not a checksum: a same-length edit such
-# as 2000 -> 3000 keeps it) the two files must also carry the same
-# modification time: every copy here is cp -p, so an unchanged file keeps
-# the card file's time and anything new on the card has another.
-files_identical() {
+# files_same A B: 0 = same size and content (as far as this unit can tell),
+# 1 = different, 2 = same size but the content cannot be compared. Used to
+# verify a backup copy: a FAT card stores times in 2-second steps, so a copy
+# made there never carries the unit file's exact time, and times are not
+# part of this check.
+files_same() {
     typeset sz1 sz2
     [[ -f "$1" && -f "$2" ]] || return 1
     sz1=$(file_size "$1"); sz2=$(file_size "$2")
     [[ -n "$sz1" && -n "$sz2" && "$sz1" == "$sz2" ]] || return 1
     [[ -n "$FILE_CMP" ]] || return 2
     same_content_with "$FILE_CMP" "$1" "$2"
-    case $? in 0) ;; 1) return 1 ;; *) return 2 ;; esac
-    if [[ "$FILE_CMP" == wc ]]; then
+    case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
+}
+# files_identical SRC DST: is the unit's copy current? files_same plus,
+# with only the wc fingerprint (counts, not a checksum: a same-length edit
+# such as 2000 -> 3000 keeps it), the same modification time. Every install
+# copy is cp -p from the card, which keeps the card file's time exactly, so
+# an unchanged file matches and anything new on the card does not.
+files_identical() {
+    typeset rc
+    files_same "$1" "$2"; rc=$?
+    if [[ $rc -eq 0 && "$FILE_CMP" == wc ]]; then
         [[ "$1" -nt "$2" || "$1" -ot "$2" ]] && return 1
     fi
-    return 0
+    return $rc
 }
 
 # ex: MH2p_US_PO416_P2870 (Porsche), MH2p_ER_AUG35_P2873 (Audi e-tron),
@@ -487,7 +495,7 @@ install_file() {
         cp -p "$dst" "$bk" || { print -u2 "ERROR: backup failed: $dst"; return 2; }
         # Never overwrite a file whose backup is not a verified copy (the
         # size must match; the content too when this unit can compare it).
-        files_identical "$dst" "$bk"
+        files_same "$dst" "$bk"
         vrc=$?
         [[ $vrc -eq 1 ]] && { print -u2 "ERROR: backup verify failed: $bk"; rm -f "$bk"; return 2; }
         [[ $vrc -eq 2 ]] && print "backup verified:   by size only (no content comparison tool on this unit)"
@@ -548,7 +556,7 @@ swap_binary_for_wrapper() {
     # Timestamped historical backup (each run gets its own).
     bk="$BACKUP_DIR/${name}.original.$(ts)"
     cp -p "$dst_active" "$bk" || { print -u2 "ERROR: backup of original $name failed"; return 2; }
-    files_identical "$dst_active" "$bk"
+    files_same "$dst_active" "$bk"
     vrc=$?
     [[ $vrc -eq 1 ]] && { print -u2 "ERROR: backup verify failed: $bk"; rm -f "$bk"; return 2; }
     [[ $vrc -eq 2 ]] && print "backup verified:   by size only (no content comparison tool on this unit)"
@@ -557,7 +565,7 @@ swap_binary_for_wrapper() {
     # Stable-name local backup (always reflects the original binary content).
     cp -p "$dst_active" "$local_real_backup" && \
         print "backup .real:      $dst_active -> $local_real_backup"
-    files_identical "$dst_active" "$local_real_backup"
+    files_same "$dst_active" "$local_real_backup"
     [[ $? -eq 1 ]] && { print -u2 "ERROR: backup verify failed: $local_real_backup"; return 2; }
     mv "$dst_active" "$dst_real" || { print -u2 "ERROR: mv $name -> $name.real failed"; return 3; }
     print "preserve original: $dst_active -> $dst_real"
@@ -729,7 +737,13 @@ if [[ -f "$GAL_ENV_SRC" ]]; then
          /^GAL_CLUSTER_[A-Z0-9_]+=[A-Za-z0-9_.:\/-]*$/ { print; n++ }
          END { exit (n > 0 ? 0 : 1) }' "$GAL_ENV_SRC" > "/tmp/cluster_gal_env.$$" 2>/dev/null
     if [[ -s "/tmp/cluster_gal_env.$$" ]]; then
-        install_file "/tmp/cluster_gal_env.$$" "$GAL_ENV_DST" && chmod 644 "$GAL_ENV_DST" 2>/dev/null
+        # the staged file is new every run, so compare by content, not time
+        files_same "/tmp/cluster_gal_env.$$" "$GAL_ENV_DST"
+        if [[ $? -eq 0 ]]; then
+            print "skip identical:    $GAL_ENV_DST"
+        else
+            install_file "/tmp/cluster_gal_env.$$" "$GAL_ENV_DST" && chmod 644 "$GAL_ENV_DST" 2>/dev/null
+        fi
         awk '{ printf "gal env:           %s\n", $0 }' "$GAL_ENV_DST"
     else
         print "gal env:           WARN gal_env.txt has no valid GAL_CLUSTER_NAME=value line, ignored"
