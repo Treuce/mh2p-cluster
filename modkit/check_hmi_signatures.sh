@@ -20,11 +20,13 @@
 #   modkit/check_hmi_signatures.sh <mod.jar> <dir-with-stock-jars>
 #
 # Pass the FULL release JAR (Update/ClusterIntegration_<version>.jar), not the
-# aa_only copy: the aa_only JAR deliberately lacks CarPlayDSIManager and
-# AndroidAuto2EventListener, and the Subsystem class is identical in both, so
-# the full JAR gives the complete comparison in one run. (The mod's
-# AndroidAuto2Subsystem makes no direct calls on AndroidAuto2EventListener,
-# so that class's comparison is informational.)
+# aa_only copy: the aa_only JAR deliberately lacks CarPlayDSIManager, and the
+# androidauto2 classes are identical in both, so the full JAR gives the
+# complete comparison in one run. Note that this script compares signatures
+# only: AndroidAuto2EventListener matches stock by signature while its
+# constructor subscribes two more DSI attributes (7, 8: next turn, distance)
+# than the Audi stock class, which is exactly why the mod's copy must be
+# installed.
 #
 # Requires: javap (any JDK), unzip. Exit code 0 = every shadowed class found
 # in the stock jars has identical constructor/method signatures, 1 = mismatch

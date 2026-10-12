@@ -90,14 +90,19 @@ done < <(find "$OVERLAY" -type f -print0 | sort -z)
 # Derive an Android-Auto-only JAR next to each release JAR. install.sh uses it
 # on Audi unless enable_carplay.txt is present. The carplay package and the
 # androidauto2 package have no cross-references (verified with javap/grep on
-# v0034), so dropping the CarPlay classes needs no recompilation. The pure
-# stock AndroidAuto2EventListener copy is dropped too: it carries no mod code
-# and only widens the set of stock classes being shadowed.
+# v0034), so dropping the CarPlay classes needs no recompilation. Every
+# androidauto2 class stays, AndroidAuto2EventListener included: its
+# constructor is the only place that subscribes the DSI attributes, and the
+# mod's copy subscribes {3,5,6,7,8} where the stock Audi class subscribes
+# {3,5,6}; 7 and 8 are the next-turn event and the distance to the next turn,
+# without which the mod never receives a manoeuvre (no BAP_MANEUVER lines).
+# An earlier build dropped it as a "pure stock copy" because its method
+# signatures match stock; the difference is in the constructor body.
 python3 - "$PKG/Mods/ClusterIntegration/Update" <<'PY'
 import os, sys, zipfile
 upd = sys.argv[1]
 DROP_PREFIX = "de/audi/app/terminalmode/smartphone/carplay/"
-DROP_EXACT = {"de/audi/app/terminalmode/smartphone/androidauto2/AndroidAuto2EventListener.class"}
+DROP_EXACT = set()
 out_dir = os.path.join(upd, "aa_only")
 os.makedirs(out_dir, exist_ok=True)
 # A tracked aa_only jar may have been overlaid from modkit/Mods; drop any
@@ -121,7 +126,7 @@ for name in sorted(os.listdir(upd)):
                 continue
             zout.writestr(info, zin.read(info))
             kept += 1
-    print(f"  derive:  Mods/ClusterIntegration/Update/aa_only/{os.path.basename(dst)} ({kept} entries kept, {dropped} CarPlay/stock entries dropped)")
+    print(f"  derive:  Mods/ClusterIntegration/Update/aa_only/{os.path.basename(dst)} ({kept} entries kept, {dropped} CarPlay entries dropped)")
 PY
 
 rm -f "$OUT_ABS"
