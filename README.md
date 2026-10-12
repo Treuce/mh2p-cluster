@@ -262,13 +262,13 @@ On the e-tron the map shows in the virtual cockpit while Android Auto is connect
 
 ### Fitting the map to the e-tron's cockpit
 
-The cockpit is 1920x722 and the phone streams a 16:9 frame (1280x720 with the default `codecRes` 720), so `gal_h264.mode` `letter` leaves black bars left and right. Options, all set from the card without reflashing:
+The daemon sizes its window to the cluster display it detects (1920x722 on the e-tron) and blits the decoded frame into it according to `gal_h264.mode`. The phone can only stream 16:9 frames, so the default `letter` mode pillarboxes them: 722 x 16/9 = 1283 pixels wide, centred, which is the narrow box seen on the first e-tron runs. The settings that fill the panel, all from the card without reflashing:
 
-- `gal_h264.mode="stretch"` in `config_overrides.txt`: full width, map squashed vertically by a third. Quickest test.
-- `gal_h264.mode="fill"` plus `GAL_CLUSTER_INSET_TOP=120` and `GAL_CLUSTER_INSET_BOTTOM=120` in `gal_env.txt`: the 1280x720 frame is scaled 1.5x and the centre 481 rows are shown; the insets (codec-frame pixels) tell the phone to keep its cluster UI inside that band. Correct aspect, 1.5x upscale.
-- `gal_h264.codecRes=1080` with `gal_h264.zoomY=1.5` (and insets of 180 top and bottom): the phone streams 1920x1080 and the centre 1920x720 band is shown pixel for pixel. Best quality if the phone and the receiver agree to 1080p; check `/tmp/gal_cluster.log` with `GAL_CLUSTER_LOG=1` in `gal_env.txt` if nothing appears.
+- `gal_h264.codecRes=1080` and `gal_h264.mode="fill"` in `config_overrides.txt`, with `GAL_CLUSTER_INSET_TOP=180` and `GAL_CLUSTER_INSET_BOTTOM=180` in `gal_env.txt`. The phone streams 1920x1080 (confirmed from the SPS it sends), `fill` crops the centre 1920x722 band and shows it pixel for pixel across the full width, and the insets (in codec-frame pixels) tell the phone to keep its cluster UI inside that band. Leave `zoomX`, `zoomY`, `panX` and `panY` at their defaults; `zoomY` on top of `letter` is what produced the squashed look.
+- The same with `codecRes` 720 and insets of 120: the centre 481 rows of a 1280x720 frame, upscaled 1.5x. Less sharp, less bandwidth.
+- `gal_h264.mode="stretch"`: full width by distorting the frame. Only for a quick look.
 
-`gal_env.txt` lines are copied to `/mnt/app/eso/bin/apps/cluster/gal_env` (recorded in the manifest) and exported by the `gal` wrapper before `gal.real` starts; `gal_env.example.txt` ships next to the overrides example. Re-run the installer after every change (it backs up and replaces the config, and `gal` has to restart to pick up the environment).
+`gal_env.txt` lines are copied to `/mnt/app/eso/bin/apps/cluster/gal_env` (recorded in the manifest) and exported by the `gal` wrapper before `gal.real` starts; `gal_env.example.txt` ships next to the overrides example. Re-run the installer after every change (it backs up and replaces the config, and `gal` has to restart to pick up the environment). The hook's own log (`GAL_CLUSTER_LOG=1`) shows what was negotiated: `insets: top=180 ... bottom=180` and `codec_res=3(1080p)` in the `sdresp:` line; the daemon's `cluster_daemon.log` shows `display size: 1920x722 (... auto=ok ...)` and `BeginSequence: 1920x1080`.
 
 ### CarPlay on Audi
 
