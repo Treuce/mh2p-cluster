@@ -616,7 +616,7 @@ apply_override() {
             }
         }
         inblk && !done && blk != "" {
-            pat = "^[ \t]*\"" blk "\"[ \t]*:[ \t]*\{"
+            pat = "^[ \t]*\"" blk "\"[ \t]*:[ \t]*[{]"
             if (match($0, pat)) {
                 pat2 = "\"" sub_key "\"[ \t]*:[ \t]*"
                 if (match($0, pat2)) {
