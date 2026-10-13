@@ -65,7 +65,7 @@ fi
 CLUSTER_BIN=/mnt/app/eso/bin/apps/cluster/cluster
 if [ -x "$CLUSTER_BIN" ]; then
     if ! PATH="$PATH:/bin:/usr/bin:/mnt/app/armle/usr/bin:/mnt/app/armle/bin" pidin ar 2>/dev/null | grep 'cluster[ ]daemon' >/dev/null 2>&1; then
-        "$CLUSTER_BIN" daemon verbose=2 >/dev/null 2>&1 &
+        "$CLUSTER_BIN" daemon >/dev/null 2>&1 &
         echo "cluster daemon: not running, started by the gal wrapper (pid $!)" >> $GAL_PRELOAD_LOG
     fi
 fi
