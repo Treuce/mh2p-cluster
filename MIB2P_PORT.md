@@ -109,12 +109,12 @@ python scripts/test_lifecycle.py --stock-api ../mib2p-android-auto-cluster/andro
   accessor names different from upstream javac: never combine its rebuilt
   Subsystem with old packaged/stock Subsystem inner classes. The shipped ZIPs
   and native binaries do not contain these changes.
-- Wire the receiver/playback owner into gal_cluster.c. Its existing static
-  endpoint flag, global router pointer and untagged raw H.264 ring are unchanged.
-  They still need our receiver-generation admission, per-owner replies and
-  audited detachment/drain before reuse. The current Java generation cannot
-  identify a late DSI callback that is already delivered into a new connection
-  without a generation tag at its native/subscription boundary.
+- Verify the new receiver/player adapters on QNX: interception hits, stock
+  callback ordering and mutex ordering, same-process receiver replacement,
+  shared atomics, process permissions and real codec/Start ordering. The native
+  implementation below is now wired and host-tested; it is not a QNX build.
+  Java still cannot identify a late untagged DSI notification already delivered
+  into a new connection without tagging its subscription/native boundary.
 - Add authoritative decoder/presentation readiness and stream-generation/codec
   reset evidence. PREPARED/RUNNING here acknowledge process actions, not valid
   pictures, surface fences or physical pixels. The source33 binding and actual
@@ -133,3 +133,97 @@ python scripts/test_lifecycle.py --stock-api ../mib2p-android-auto-cluster/andro
 
 The first draft is wired into this base's source and host-tested. It is not a
 vehicle-ready installer or a claim of confirmed physical OEM restoration.
+
+## Native receiver and buffer generation follow-up
+
+The former process-wide `endpoint_installed` flag and shared fake endpoint are
+replaced by distinct video/input endpoints owned by each native receiver lifetime.
+MessageRouter init retires the old owner, forwards the stock init/result and
+admits a fresh owner only into vacant14/21 cells. Legitimate stock registration
+for either service takes priority: only our exact raw cells are detached before
+forwarding the native registration. Native channel-open errors are preserved.
+The source's IDs14/21 remain service IDs; actual transport channel numbers are
+recorded at onChannelOpened and used for replies. They are not assumed to be14/21.
+
+Receiver prepare/shutdown, local channel close, endpoint close and video Stop
+retire ownership or clear stream admission. Endpoint close returns the native
+previous-open gate, including0 on a duplicate close. Every callback checks its
+receiver/endpoint/channel ownership; video callbacks capture the stream epoch
+before the native monitor, rejecting ones overtaken by a restart. All custom
+sends are scoped to the same owner and serialized with retirement. The stock
+incoming dispatch and machine return values continue to be forwarded.
+
+The exact saved receiver exports Start's session/configuration fields as1/2 and
+Ack's session/count fields as1/2. A bounded protobuf reader tracks those values.
+Duplicate live Start is idempotent; changed session/configuration or restart
+after Stop gets a fresh stream epoch. Configuration delivered before the first
+Start on a newly opened channel is retained. Playback restart requires fresh
+codec/keyframe; changed codec does not silently relabel an existing decoder.
+
+Frame ACKs now originate from accepted cluster video, on its own channel and
+session, rather than copying the main stream's session/count. The upstream
+reported a startup dependency on `80 04 08 00 10 01`; that pulse is generated
+for the owned channel only while it is awaiting its first Start. Setup/focus
+negotiation is retained. Source background fake-main/keepalive and in-GAL decode
+are disabled because they retained global receiver pointers. Off-HMI background
+behaviour may consequently differ from the upstream release; porting those
+optional policies requires their own owned/joined implementation and target test.
+
+The v2 mapping is `/mib2p_cluster_h264_v2`; the old raw mapping is not consumed.
+It contains a random GAL boot nonce, writer PID, monotonic receiver/stream
+counters, one random consumer identity and eight bounded512KiB packets, plus a
+64KiB codec cache (about4.1MiB total). Compound metadata and byte copies use a
+32-bit atomic try-lock; no Nvidia/Screen call holds it. Copies retry briefly
+under contention. Persistent contention, overflow, malformed length or counter
+exhaustion cannot turn into a silently broken prediction chain. Stop is an
+independent atomic flag observable without another video frame or a copy lock.
+Fresh decoding waits for Annex-B SPS/PPS and an IDR. Actual phone codec framing
+and ordering remain target checks, especially restart on an already open channel.
+
+The writer has a process lock and recreates the public mapping as a new inode
+with a fresh nonce, never clearing an old player's existing mapped inode. The
+player checks writer existence/public nonce every100ms, uses an exact-size RW
+mapping, claims one immutable native connection and never adopts its replacement.
+Private codec/frame copies and each H.264 Screen post check that binding. A
+stop/generation change exits the child even while video is idle. Graceful exit
+releases its own consumer identity; reclaim after a killed player requires OS
+PID-absence proof and an exact identity/stamp recheck. PID reuse blocks reclaim.
+These guards do not establish Nvidia fence completion or physical OEM pixels.
+
+Retired endpoints remain in a bounded256-owner tombstone pool rather than being
+freed while stock raw table pointers/comm work could still refer to them. Pool
+exhaustion retires custom admission and needs a GAL restart; it does not steal
+stock registrations. A fully audited comm drain could later allow reclamation.
+No preload unload is supported while stock callbacks still reference its code.
+
+Activation additionally requires `GAL_CLUSTER_LIFECYCLE=1` and
+`GAL_CLUSTER_MERGE=1` for rebuilt native components, plus Java's existing
+`enableLifecyclePort` opt-in. Defaults remain inactive. Both native components
+must be rebuilt together; upstream ZIP binaries cannot use the new ABI. No
+installer, SD recovery payload or car file was changed by this follow-up.
+
+### Evidence
+
+- Four host CTest suites pass: lifecycle, receiver/ring, actual receiver/send/player
+  adapters with mocked stock/QNX/Screen effects, and two real shared-memory
+  processes. The latter verifies100 generations and2,000 packet byte comparisons,
+  including stale reads/releases and stop without new frames.
+- Adapter tests use the real production send functions extracted at build time.
+  They exercise real ARM32 IoBuffer/table byte offsets in low-address fixture
+  memory, dynamic42/43 and77 channels, Start/session ACKs, duplicate Start,
+  a callback blocked behind a stream restart, stock-registration priority,
+  native return forwarding and rejection of old player posts. This is not an
+  ARM binary, loader interception, vendor decoder or vehicle test.
+- Existing Java compilation/P2873 API checks and100 Java/native lifecycle cycles
+  still pass; their display effects remain simulated.
+- [Native symbol audit](NATIVE_GENERATION_AUDIT.json) pins the original receiver
+  hash, confirms20 native hook definitions and reads the Start/Ack field constants
+  from actual ELF bytes. It does not prove interception hits or all imported ABIs.
+  Reproduce with `python scripts/audit_native_generation.py` alongside our saved
+  evidence and existing read-only ELF audit tool. PC test builds use pinned local
+  Python through `-DPython3_EXECUTABLE=...` if CMake cannot find it.
+
+Remaining installation prerequisites are the release/source gap, QNX build and
+binding checks, authoritative decoder/presentation feedback, OEM map service/
+source33 handover validation and extended SD recovery. The missing comm/display
+libraries still matter for stronger reclamation and physical restoration proof.
