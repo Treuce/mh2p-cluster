@@ -56,6 +56,13 @@
 #include <time.h>
 #include "cluster_player_generation.h"
 
+#ifdef MIB2P_BUILD_FINGERPRINT
+#if !defined(__QNXNTO__) || !defined(__arm__)
+#error Vehicle artifacts require the QNX ARM compiler
+#endif
+const char mib2p_player_build_id[] = "MIB2P_PORT_V1:" MIB2P_BUILD_FINGERPRINT;
+#endif
+
 /* SCREEN_FORMAT_YV12 — used in h264 mode for the decode window */
 #define SCREEN_FORMAT_YV12  13
 

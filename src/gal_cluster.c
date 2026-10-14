@@ -87,6 +87,13 @@
 #include <screen/screen.h>
 #include "cluster_h264_shm.h"
 
+#ifdef MIB2P_BUILD_FINGERPRINT
+#if !defined(__QNXNTO__) || !defined(__arm__)
+#error Vehicle artifacts require the QNX ARM compiler
+#endif
+const char mib2p_gal_build_id[] = "MIB2P_PORT_V1:" MIB2P_BUILD_FINGERPRINT;
+#endif
+
 #define LOG_PATH "/tmp/gal_cluster.log"
 #define DUMP_DIR "/tmp"
 #define MAX_SERIALIZE_BYTES (2 * 1024 * 1024)
