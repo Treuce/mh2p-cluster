@@ -384,6 +384,9 @@ static pid_t daemon_start_mirror(const char *self, const char *cmdline) {
 
     pid_t pid = fork();
     if (pid == 0) {
+        sigset_t block;
+        sigemptyset(&block); sigaddset(&block, SIGUSR1); sigaddset(&block, SIGUSR2);
+        sigprocmask(SIG_BLOCK, &block, NULL); /* survive resume before exec/handler setup */
         execv(self, targv);
         fprintf(stderr, "[daemon] execv failed errno=%d\n", errno);
         exit(1);
@@ -391,236 +394,9 @@ static pid_t daemon_start_mirror(const char *self, const char *cmdline) {
     return pid;
 }
 
-/* Daemon is a dumb command dispatcher. Java owns lifecycle state.
- *
- * Command set:
- *   prepare [args] — kill any child, spawn fresh with `prepare` arg appended
- *   start   [args] — kill any child, spawn fresh
- *   resume         — SIGUSR1 to child (no-op if no child). Promotes h264
- *                    PREPARE→RENDERING or PAUSED→RENDERING. No spawn.
- *   pause          — SIGUSR2 to child (no-op if no child). h264 child handles
- *                    it as RENDERING→PAUSED; mirror child has no handler so
- *                    kernel kills it (mirror has no useful warm state).
- *   stop           — SIGTERM child.
- *
- * Daemon does NOT track prepared vs rendering vs paused state — those live in
- * the Java integration. Daemon just executes what Java tells it. */
-
-static int daemon_run(int argc, char **argv) {
-    int i;
-    int poll_ms = (int)(get_arg_f(argc, argv, "poll", 2.0f) * 1000);
-
-    /* default mirror args: everything after "daemon", excluding daemon control args.
-     * No xres/yres injection — each child runs its own detect_disp_size in
-     * main(), same as direct invocation, which is the path empirically known
-     * to work with the displaymanager. */
-    char default_args[512] = "";
-    for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "daemon") == 0) continue;
-        if (strncmp(argv[i], "poll=", 5) == 0) continue;
-        if (strlen(default_args) > 0) strncat(default_args, " ", sizeof(default_args) - strlen(default_args) - 1);
-        strncat(default_args, argv[i], sizeof(default_args) - strlen(default_args) - 1);
-    }
-
-    /* create empty control file (0666 so Java can write to it) */
-    FILE *init = fopen(DAEMON_CTL, "w");
-    if (!init) {
-        fprintf(stderr, "[daemon] cannot create %s errno=%d\n", DAEMON_CTL, errno);
-        return 1;
-    }
-    fclose(init);
-    chmod(DAEMON_CTL, 0666);
-
-    printf("[daemon] polling %s every %dms\n", DAEMON_CTL, poll_ms);
-    printf("[daemon] default args: '%s'\n", default_args);
-    printf("[daemon] commands: prepare [args]  start [args]  resume [args]  pause  stop\n");
-
-    pid_t       child_pid = -1;
-    pid_t       splash_pid = -1;  /* idle_logo child holding disp 33 when no real child runs */
-    int         boot_splash_shown = 0;  /* once per daemon lifetime (per boot) */
-    const char *self      = argv[0];
-
-    /* Daemon comes up silent: native maps owns disp 33 by default.
-     * Splash (canim) only spawns on pause/stop commands from Java; fifthBro
-     * is shown for 2s on the first 'prepare' or 'start' command per daemon
-     * lifetime (CarPlay or AA session start), then never again until reboot. */
-
-    while (1) {
-        usleep(poll_ms * 1000);
-
-        /* reap child if it exited on its own */
-        if (child_pid > 0) {
-            int status;
-            if (waitpid(child_pid, &status, WNOHANG) == child_pid) {
-                printf("[daemon] child exited on its own (status=%d)\n", WEXITSTATUS(status));
-                child_pid = -1;
-            }
-        }
-
-        /* reap splash if it exited */
-        if (splash_pid > 0) {
-            int status;
-            if (waitpid(splash_pid, &status, WNOHANG) == splash_pid) {
-                splash_pid = -1;
-            }
-        }
-
-        /* read control file */
-        FILE *f = fopen(DAEMON_CTL, "r");
-        if (!f) continue;
-        char line[512];
-        int got = (fgets(line, sizeof(line), f) != NULL);
-        fclose(f);
-
-        if (!got) continue;
-
-        /* strip trailing whitespace */
-        char *end = line + strlen(line) - 1;
-        while (end >= line && (*end == '\n' || *end == '\r' || *end == ' ')) *end-- = '\0';
-        if (strlen(line) == 0) continue;
-
-        /* truncate the file so we don't re-process the same command */
-        FILE *clr = fopen(DAEMON_CTL, "w");
-        if (clr) fclose(clr);
-
-        printf("[daemon] cmd: '%s' (pid=%d)\n", line, (int)child_pid);
-
-        /* ── STOP: SIGTERM child, then spawn canim splash. Only spawn canim
-         *           if there was actually a child to stop — otherwise we'd
-         *           steal disp 33 from native at boot when no session ever
-         *           ran. */
-        if (strncmp(line, "stop", 4) == 0) {
-            int had_child = (child_pid > 0);
-            if (had_child) {
-                printf("[daemon] stop: SIGTERM pid=%d\n", (int)child_pid);
-                kill(child_pid, SIGTERM);
-                waitpid(child_pid, NULL, 0);
-                child_pid = -1;
-            } else {
-                printf("[daemon] stop: no child (canim suppressed)\n");
-            }
-            if (had_child && splash_pid <= 0) {
-                splash_pid = daemon_start_mirror(self, "capture=canim_splash");
-                printf("[daemon] stop: canim_splash spawned pid=%d\n", (int)splash_pid);
-            }
-
-        /* ── PAUSE: SIGUSR2 to h264 child. NO canim_splash spawn —
-         *           the h264 child paints canim itself in STAGE_PAUSED so
-         *           disp 33 stays bound to the h264 post_win throughout.
-         *           Spawning a second window here would steal the
-         *           displaymanager binding and prevent recovery on resume. */
-        } else if (strncmp(line, "pause", 5) == 0) {
-            if (child_pid > 0) {
-                printf("[daemon] pause: SIGUSR2 pid=%d\n", (int)child_pid);
-                kill(child_pid, SIGUSR2);
-            } else {
-                printf("[daemon] pause: no child\n");
-            }
-
-        /* ── RESUME: SIGUSR1 (h264 PREPARE/PAUSED → RENDERING) ─────── */
-        } else if (strncmp(line, "resume", 6) == 0) {
-            /* Kill splash first so it releases disp 33 before h264 child
-             * window becomes visible again. */
-            if (splash_pid > 0) {
-                kill(splash_pid, SIGTERM);
-                waitpid(splash_pid, NULL, 0);
-                splash_pid = -1;
-            }
-            if (child_pid > 0) {
-                printf("[daemon] resume: SIGUSR1 pid=%d\n", (int)child_pid);
-                kill(child_pid, SIGUSR1);
-            } else {
-                printf("[daemon] resume: no child\n");
-            }
-
-        /* ── PREPARE: kill any child, spawn with `prepare` arg ─────── */
-        } else if (strncmp(line, "prepare", 7) == 0) {
-            const char *extra = line + 7;
-            while (*extra == ' ') extra++;
-            char cmdline[512];
-            /* Merge daemon's default_args with command's extra args so
-             * daemon-level flags (e.g. verbose=2) flow into every child.
-             * cluster.c arg parsing is last-wins, so extra overrides
-             * default_args on conflicts. */
-            /* If the per-boot splash has already been shown (e.g. previous
-             * AA session this boot, or earlier mirror session), pass
-             * skip_boot_splash=1 so the new h264 child won't re-fire it. */
-            const char *skip_arg = boot_splash_shown ? " skip_boot_splash=1" : "";
-            int n;
-            if (*extra && *default_args)
-                n = snprintf(cmdline, sizeof(cmdline), "%s %s%s prepare", default_args, extra, skip_arg);
-            else if (*extra)
-                n = snprintf(cmdline, sizeof(cmdline), "%s%s prepare", extra, skip_arg);
-            else
-                n = snprintf(cmdline, sizeof(cmdline), "%s%s prepare", default_args, skip_arg);
-            if (n < 0 || n >= (int)sizeof(cmdline)) cmdline[sizeof(cmdline)-1] = '\0';
-
-            /* No boot_splash on prepare — h264 child paints its own fifthBro
-             * on first resume via the in-child splash path (apply_stage_signals).
-             * Spawning boot_splash here would override disp 33 too early. */
-
-            if (child_pid > 0) {
-                kill(child_pid, SIGTERM);
-                waitpid(child_pid, NULL, 0);
-                child_pid = -1;
-            }
-            /* Do NOT kill canim_splash here. h264 child spawns in PREPARE
-             * with post_win VISIBLE=0 — it doesn't claim disp 33 until
-             * resume. Leaving canim_splash alive across PREPARE keeps the
-             * Porsche image on screen during the gap between phone reconnect
-             * and user focus, instead of going BLACK. Resume kills it. The
-             * earlier in-child-splash binding race that broke first focus
-             * here is suppressed on reconnect via skip_boot_splash=1. */
-            child_pid = daemon_start_mirror(self, cmdline);
-            /* Mark per-boot splash as consumed so future prepares (e.g. after
-             * disconnect+reconnect) don't replay it. */
-            boot_splash_shown = 1;
-            printf("[daemon] prepare: pid=%d args='%s'\n", (int)child_pid, cmdline);
-
-        /* ── START: kill any child, spawn fresh ────────────────────── */
-        } else if (strncmp(line, "start", 5) == 0) {
-            const char *extra = line + 5;
-            while (*extra == ' ') extra++;
-            char cmdline[512];
-            /* Same merge as prepare: default_args + extra so daemon flags
-             * (verbose etc) reach every spawned child. */
-            int n;
-            if (*extra && *default_args)
-                n = snprintf(cmdline, sizeof(cmdline), "%s %s", default_args, extra);
-            else if (*extra)
-                n = snprintf(cmdline, sizeof(cmdline), "%s", extra);
-            else
-                n = snprintf(cmdline, sizeof(cmdline), "%s", default_args);
-            if (n < 0 || n >= (int)sizeof(cmdline)) cmdline[sizeof(cmdline)-1] = '\0';
-
-            if (!boot_splash_shown) {
-                pid_t bp = daemon_start_mirror(self, "capture=boot_splash duration_s=2");
-                printf("[daemon] boot_splash: pid=%d, waiting 2s before start\n", (int)bp);
-                if (bp > 0) waitpid(bp, NULL, 0);
-                boot_splash_shown = 1;
-            }
-
-            if (child_pid > 0) {
-                kill(child_pid, SIGTERM);
-                waitpid(child_pid, NULL, 0);
-                child_pid = -1;
-            }
-            /* Release disp 33 from the idle splash before spawning. */
-            if (splash_pid > 0) {
-                kill(splash_pid, SIGTERM);
-                waitpid(splash_pid, NULL, 0);
-                splash_pid = -1;
-            }
-            child_pid = daemon_start_mirror(self, cmdline);
-            printf("[daemon] start: pid=%d args='%s'\n", (int)child_pid, cmdline);
-
-        } else {
-            printf("[daemon] unknown command '%s' (use: prepare/start [args] / resume / pause / stop)\n", line);
-        }
-    }
-
-    return 0;
-}
+/* Versioned AA-only lifecycle dispatcher. Legacy cluster_ctl is deliberately
+ * not consumed: two writers must not race for displayable 33. */
+#include "cluster_lifecycle_daemon.h"
 
 /* parse "key=value" args */
 static float get_arg_f(int argc, char **argv, const char *key, float def) {
@@ -2513,6 +2289,7 @@ static uint64_t now_us(void) {
  * display and h264 modes — same arg names + defaults across modes). */
 
 int run_h264_mode(int argc, char** argv) {
+    pid_t lifecycle_parent = (pid_t)strtol(get_arg_s(argc, argv, "lifecycle_parent", "0"), NULL, 10);
     int dump_mode = (argc > 1 && strcmp(argv[1], "dump") == 0);
 
     /* Daemon two-stage support: bare `prepare` arg starts the process in
@@ -2540,6 +2317,11 @@ int run_h264_mode(int argc, char** argv) {
         }
         signal(SIGUSR1, on_sigusr1);
         signal(SIGUSR2, on_sigusr2);
+        {
+            sigset_t unblock;
+            sigemptyset(&unblock); sigaddset(&unblock, SIGUSR1); sigaddset(&unblock, SIGUSR2);
+            sigprocmask(SIG_UNBLOCK, &unblock, NULL);
+        }
         LOG("h264 stage=%s (SIGUSR1=resume SIGUSR2=pause SIGTERM=exit)\n",
             prepare_mode ? "PREPARE" : "RENDERING");
     }
@@ -2676,6 +2458,10 @@ int run_h264_mode(int argc, char** argv) {
         read_pos, last_total);
 
     while (1) {
+        if (lifecycle_parent > 0 && getppid() != lifecycle_parent) {
+            LOG("lifecycle: daemon lost; exiting rather than retaining display 33\n");
+            return 1; /* process exit releases its Screen/decoder handles */
+        }
         /* Apply pause/resume signals here too — when AA is paused, the phone
          * stops sending H.264 frames, so the decoder's cb_display_picture
          * stops firing and pause handling stuck inside that callback would
