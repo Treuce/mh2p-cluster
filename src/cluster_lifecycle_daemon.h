@@ -3,6 +3,7 @@
  * lossy control file ONLY in rebuilt players, never in packaged releases.
  */
 #include "cluster_lifecycle.h"
+#define LC_CHILD "/tmp/mib2p_cluster_child"
 
 static volatile sig_atomic_t lc_quit = 0;
 static void lc_signal(int sig) { (void)sig; lc_quit = 1; }
@@ -21,6 +22,14 @@ static int lc_publish(const lc_owner *s) {
     if (fclose(f)) ok = 0;
     if (ok) ok = !rename(LC_STATUS ".new", LC_STATUS);
     return ok;
+}
+static int lc_record_child(pid_t pid) {
+    FILE *f = fopen(LC_CHILD ".new", "w");
+    int ok;
+    if (!f) return 0;
+    ok = pid > 0 ? fprintf(f, "%ld\n", (long)pid) > 0 : fputs("PENDING\n", f) >= 0;
+    if (fclose(f)) ok = 0;
+    return ok && !rename(LC_CHILD ".new", LC_CHILD);
 }
 /* Exit is the process ownership barrier. A timeout is ERROR, never STOPPED.
  * SIGKILL is restricted to our exact unreaped child PID, not a name search.
@@ -56,6 +65,23 @@ static int daemon_run(int argc, char **argv) {
     memset(&lock, 0, sizeof(lock)); lock.l_type = F_WRLCK; lock.l_whence = SEEK_SET;
     if (lockfd < 0 || fcntl(lockfd, F_SETLK, &lock)) return 1;
     fcntl(lockfd, F_SETFD, FD_CLOEXEC);
+    /* After SIGKILL the former child can outlive its daemon. A replacement
+     * daemon cannot waitpid that process, and must not claim a release barrier
+     * just because its own child variable starts empty. Do not signal a saved
+     * PID (it may have been reused); refuse startup until it no longer exists.
+     */
+    f = fopen(LC_CHILD, "r");
+    if (f) {
+        long previous;
+        int valid = fscanf(f, "%ld", &previous) == 1 && previous > 0 && previous <= 0x7fffffffL;
+        fclose(f);
+        if (!valid || kill((pid_t)previous, 0) == 0 || errno != ESRCH) {
+            fprintf(stderr, "[lifecycle] prior child release unproved; refusing daemon replacement\n");
+            close(lockfd); return 1;
+        }
+        if (unlink(LC_CHILD)) { close(lockfd); return 1; }
+    }
+    if (lc_now() == 0) { close(lockfd); return 1; }
     fd = open("/dev/urandom", O_RDONLY);
     if (fd < 0 || read(fd, nonce, sizeof(nonce)) != (ssize_t)sizeof(nonce)) {
         if (fd >= 0) close(fd);
@@ -82,11 +108,13 @@ static int daemon_run(int argc, char **argv) {
         uint64_t now = lc_now();
         int accepted = 0;
         lc_request r;
+        if (now == 0) break;
         if (child > 0) {
             int status;
             pid_t reaped = waitpid(child, &status, WNOHANG);
             if (reaped == child || (reaped < 0 && errno == ECHILD)) {
                 child = -1; state.busy = 0; state.retired = 1;
+                if (unlink(LC_CHILD) && errno != ENOENT) break;
                 strcpy(state.state, "STOPPED");
                 printf("[lifecycle] child exited; session retired; OEM restoration required\n");
                 if (!lc_publish(&state)) break;
@@ -95,6 +123,7 @@ static int daemon_run(int argc, char **argv) {
         if (lc_expired(&state, now)) {
             state.retired = 1;
             state.busy = !lc_stop_child(&child);
+            if (!state.busy && unlink(LC_CHILD) && errno != ENOENT) break;
             strcpy(state.state, state.busy ? "ERROR" : "STOPPED");
             printf("[lifecycle] lease expired; child=%d; state=%s\n", (int)child, state.state);
             if (!lc_publish(&state)) break;
@@ -114,6 +143,7 @@ static int daemon_run(int argc, char **argv) {
                 r.owner, (unsigned long long)r.generation, (unsigned long long)r.sequence, r.action);
             if (!strcmp(r.action, "STOP")) {
                 state.busy = !lc_stop_child(&child);
+                if (!state.busy && unlink(LC_CHILD) && errno != ENOENT) break;
                 strcpy(state.state, state.busy ? "ERROR" : "STOPPED");
                 /* No idle/boot splash: STOP relinquishes displayable 33. */
             } else if (!strcmp(r.action, "PREPARE")) {
@@ -121,7 +151,24 @@ static int daemon_run(int argc, char **argv) {
                     char args[512];
                     int n = snprintf(args, sizeof(args), "capture=h264 skip_boot_splash=1 lifecycle_parent=%d %s %s prepare",
                         (int)getpid(), r.args, defaults);
-                    if (n > 0 && n < (int)sizeof(args)) child = daemon_start_mirror(argv[0], args);
+                    /* Reserve before fork. A SIGKILL between fork and recording
+                     * the PID leaves PENDING, which a new daemon must refuse.
+                     * Never advertise a false exit barrier for an orphan.
+                     */
+                    if (n <= 0 || n >= (int)sizeof(args) || !lc_record_child(0)) {
+                        state.retired = 1; strcpy(state.state, "ERROR");
+                        if (!lc_publish(&state)) break;
+                        continue;
+                    }
+                    child = daemon_start_mirror(argv[0], args);
+                    if (child > 0) {
+                        if (!lc_record_child(child)) {
+                            state.busy = !lc_stop_child(&child);
+                            state.retired = 1; strcpy(state.state, "ERROR");
+                            if (!lc_publish(&state)) break;
+                            continue;
+                        }
+                    } else unlink(LC_CHILD); /* fork failed: no owned child */
                     state.busy = child > 0;
                     state.retired = !state.busy;
                     strcpy(state.state, state.busy ? "PREPARED" : "ERROR");
@@ -137,6 +184,7 @@ static int daemon_run(int argc, char **argv) {
         usleep(100000); /* bounded poll independent of video arrival */
     }
     state.retired = 1; state.busy = !lc_stop_child(&child);
+    if (!state.busy) unlink(LC_CHILD);
     strcpy(state.state, state.busy ? "ERROR" : "STOPPED"); lc_publish(&state);
     close(lockfd);
     return state.busy ? 1 : 0;
