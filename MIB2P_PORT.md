@@ -125,9 +125,11 @@ python scripts/test_lifecycle.py --stock-api ../mib2p-android-auto-cluster/andro
   child reaping and orphan handling on QNX. An interrupted PENDING reservation
   deliberately blocks startup until recovered; it does not authorise deleting
   the marker while a child may live.
-- Extend the SD recovery kit to this repo's GAL/gal.real, helper, ClusterIntegration
-  JARs and Persist installation before installing any candidate. The existing
-  recovery script targets the earlier port and was not changed here.
+- Validate the new stock rollback on the car. `modkit/build_audi_sd.py` prepares
+  the runnable upstream diagnostic package with verified saved GAL, verbose
+  rollback, the exact helper/JAR allowlist and installed Persist disable marker.
+  It deliberately does not ship our uncompiled lifecycle/native changes. The
+  earlier independent recovery kit remains scoped to the previous port.
 - Confirm repeated unplug/reconnect, loss without final frames, helper/GAL crash,
   cold boot and NavCompass coexistence in the A6, including actual OEM map return.
 
@@ -225,5 +227,22 @@ installer, SD recovery payload or car file was changed by this follow-up.
 
 Remaining installation prerequisites are the release/source gap, QNX build and
 binding checks, authoritative decoder/presentation feedback, OEM map service/
-source33 handover validation and extended SD recovery. The missing comm/display
+source33 handover validation and vehicle verification of SD recovery. The missing comm/display
 libraries still matter for stronger reclamation and physical restoration proof.
+
+## Prepared upstream diagnostic card (2026-10-14)
+
+`modkit/build_audi_sd.py --stock-gal <saved-gal> --output-directory <new-folder>`
+pins the upstream Audi v0034 ZIP and the actual saved P2873 GAL hashes. It
+preserves all Data/Meta bytes and six upstream native/Java binaries, overlays
+our recovery scripts, defaults to diagnostic mode, verifies every output file
+and ZIP entry, and writes a provenance receipt. The Windows PowerShell card
+verifier and concrete car check/self-test/rollback instructions are included.
+No root config override, uninstall marker, force-install or CarPlay opt-in is
+shipped. Copy folder contents to an empty FAT32 card root, not the folder itself.
+
+This provides a runnable upstream diagnostic candidate, not a vehicle build
+of our disconnect/reconnect implementation. Rebuilding that still requires
+matched QNX/ARM and Java outputs. The prepared card's rollback restores stock
+GAL and removes this mod's added Java/native files; stock JARs and NavCompass
+remain. Runtime recovery writes and early boot execution must be tested on QNX.

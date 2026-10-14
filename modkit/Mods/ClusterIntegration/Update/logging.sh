@@ -21,6 +21,7 @@ ci_stamp() {
             print -r -- "$CI_RUN_ID-$n"
             return 0
         fi
+        [[ -d "$CI_RUN_DIR/stamp-$n" ]] || return 1
         n=$((n + 1))
     done
     return 1
@@ -43,6 +44,7 @@ ci_log_init() {
         CI_RUN_ID="$CI_ROLE-$n"
         CI_RUN_DIR="$log_root/$CI_RUN_ID"
         if mkdir "$CI_RUN_DIR" 2>/dev/null; then break; fi
+        [[ -d "$CI_RUN_DIR" ]] || return 1
         n=$((n + 1))
     done
     [[ $n -le 10000 ]] || return 1

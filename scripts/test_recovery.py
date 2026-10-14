@@ -33,7 +33,8 @@ def main():
     results = []
     for fault, expected in [('', 0), ('backup', 4), ('stage', 4), ('corrupt_stage', 4),
                             ('rename', 5), ('helper_backup', 6), ('jar_remove', 6),
-                            ('no_compare', 3), ('bad_stock', 3), ('missing_reference', 3)]:
+                            ('no_compare', 3), ('bad_stock', 3), ('missing_reference', 3),
+                            ('bad_unit_original', 0)]:
         card = base / (fault or 'success')
         upd = card / 'Mods/ClusterIntegration/Update'
         stock = upd / 'Stock'
@@ -64,11 +65,17 @@ def main():
         jar = run / 'sandbox-root/jars/ClusterIntegration_selftest.jar'
         if expected == 0:
             assert active.read_bytes() == data
+            assert (run / 'sandbox-root/apps/gal.real').read_bytes() == data
             assert not helper.exists() and not jar.exists()
+            assert (jar.parent / 'NaviCompass.jar').read_bytes() == b'preserve NavCompass\n'
+            assert (jar.parent / 'AppDevelopment.jar').read_bytes() == b'preserve stock jar\n'
+            for name in ('gal_cluster.so', 'dio_cluster.so', 'cluster_config.json', 'diag_mode', 'gal_env'):
+                assert not (helper.parent / name).exists()
+            assert not (jar.parent / 'ClusterIntegration_StorageMountHandler_stub.jar').exists()
             assert 'SELFTEST_OK' in (run / 'result.txt').read_text()
             # Every pre-change backup retained under the isolated run.
             backups = list((run / 'sandbox-backups').glob('*.removed.*'))
-            assert len(backups) == 3
+            assert len(backups) == (10 if fault == 'bad_unit_original' else 9)
         elif fault in ('backup', 'stage', 'corrupt_stage', 'rename'):
             assert active.read_bytes() == b'#!/bin/ksh\n'
             assert helper.exists() and jar.exists()

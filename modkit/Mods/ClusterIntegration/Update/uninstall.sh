@@ -89,8 +89,13 @@ if [[ $CI_SELFTEST -eq 1 ]]; then
     ci_run mkdir -p "$CLUSTER_DIR" "$JAR_DIR" || exit 2
     ci_run cp -p "$STOCK_DIR/gal.real" "$APPS_DIR/gal.real" || exit 2
     print -r -- '#!/bin/ksh' > "$APPS_DIR/gal"
-    print -r -- 'sandbox helper' > "$CLUSTER_DIR/cluster"
+    for name in cluster gal_cluster.so dio_cluster.so cluster_config.json diag_mode gal_env; do
+        print -r -- 'sandbox helper' > "$CLUSTER_DIR/$name"
+    done
     print -r -- 'sandbox jar' > "$JAR_DIR/ClusterIntegration_selftest.jar"
+    print -r -- 'sandbox stub' > "$JAR_DIR/ClusterIntegration_StorageMountHandler_stub.jar"
+    print -r -- 'preserve NavCompass' > "$JAR_DIR/NaviCompass.jar"
+    print -r -- 'preserve stock jar' > "$JAR_DIR/AppDevelopment.jar"
     ci_log "SELFTEST_SCOPE=$CI_RUN_DIR/sandbox-root"
 fi
 [[ ! -f "$STOCK_DIR/gal.real" ]] || validate_stock_gal || exit 3
@@ -171,6 +176,17 @@ restore_binary() {
     ci_run mv -f "$APPS_DIR/$name.mib2p-restore-stage" "$APPS_DIR/$name" || return 1
     same "$original" "$APPS_DIR/$name" || return 1
     # Retain .real as an additional original; never move the last good copy.
+    # If that unit copy differs from our verified SD original, preserve the
+    # differing bytes in Backup and refresh it. A future installer must not
+    # wrap a good active binary around a corrupt .real left from a failure.
+    if [[ -f "$APPS_DIR/$name.real" ]] && ! same "$original" "$APPS_DIR/$name.real"; then
+        backup_file "$APPS_DIR/$name.real" || return 1
+        ci_run cp -p "$original" "$APPS_DIR/$name.mib2p-restore-stage" || return 1
+        same "$original" "$APPS_DIR/$name.mib2p-restore-stage" || return 1
+        ci_run chmod 755 "$APPS_DIR/$name.mib2p-restore-stage" || return 1
+        ci_run mv -f "$APPS_DIR/$name.mib2p-restore-stage" "$APPS_DIR/$name.real" || return 1
+        same "$original" "$APPS_DIR/$name.real" || return 1
+    fi
     note "restore $APPS_DIR/$name from=$original" || return 1
     ci_log "RESTORED_AND_VERIFIED $name"
 }
@@ -200,6 +216,7 @@ if [[ $ERRORS -ne 0 ]]; then fail "ROLLBACK_ERRORS=$ERRORS"; exit 6; fi
 if [[ $CI_SELFTEST -eq 1 ]]; then
     same "$STOCK_DIR/gal.real" "$APPS_DIR/gal" || exit 6
     [[ ! -e "$CLUSTER_DIR/cluster" && ! -e "$JAR_DIR/ClusterIntegration_selftest.jar" ]] || exit 6
+    [[ -f "$JAR_DIR/NaviCompass.jar" && -f "$JAR_DIR/AppDevelopment.jar" ]] || exit 6
     CI_RESULT=SELFTEST_OK
 else
     CI_RESULT=ROLLBACK_OK

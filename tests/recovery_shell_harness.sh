@@ -29,6 +29,9 @@ cp() {
         helper_backup) [[ $dst != *cluster.removed.* ]] || return 9 ;;
     esac
     command cp "$@" || return $?
+    if [[ ${RECOVERY_FAULT:-} == bad_unit_original && $dst == */sandbox-root/apps/gal.real ]]; then
+        printf '\177ELFcorrupt unit original\n' > "$dst"
+    fi
     if [[ ${RECOVERY_FAULT:-} == corrupt_stage && $dst == *.mib2p-restore-stage ]]; then
         printf 'bad executable\n' > "$dst"
     fi
@@ -42,5 +45,6 @@ rm() {
     command rm "$@"
 }
 export MOD_PATH=$1
+unset modPath
 shift
 source "$MOD_PATH/uninstall.sh" "$@"

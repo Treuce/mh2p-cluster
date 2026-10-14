@@ -29,6 +29,8 @@ is available on the unit, preflight blocks installation/rollback before live
 changes; size or word counts are insufficient. Other originals fall back to
 the unit's `.real` or installer-created SD `Backup/*.real`. Check output will
 state the selected source. Original `.real` files are retained after rollback.
+A differing unit `.real` is backed up and refreshed from the verified source,
+so a future installation cannot accidentally reuse a damaged original.
 
 The root `modkit/sd_failsafe.sh` dispatches a check by default. The existing
 `Mods/ClusterIntegration/uninstall.txt` marker selects real rollback. Live
