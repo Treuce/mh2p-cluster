@@ -9,6 +9,7 @@ import json
 from pathlib import Path, PurePosixPath
 import subprocess
 import zipfile
+from port_build import JAR as PORT_JAR, validate_artifacts, fingerprint
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_SHA = 'ee0ed7af7f96230e0181d9bd640b607c6520b31b6124267ea70a6decee8c59d7'
@@ -134,11 +135,16 @@ def safe_name(raw):
     return name
 
 
-def validate_payload(payload, release, stock):
+def validate_payload(payload, release, stock, port=None):
     protected = [name for name in release if name.startswith(('Data/', 'Meta/'))]
     for name in protected:
         assert payload[name] == release[name], f'Signed ModKit bytes changed: {name}'
     binaries = [name for name in release if name.endswith(('.jar', '.so')) or name == UPD + 'cluster']
+    if port is not None:
+        replaced = {UPD + 'cluster', UPD + 'gal_cluster.so'}
+        replaced.update(n for n in binaries if n.endswith('.jar') and n.startswith(UPD) and
+                        (n[len(UPD):].startswith('aa_only/') or '/' not in n[len(UPD):]))
+        binaries = [n for n in binaries if n not in replaced]
     for name in binaries:
         assert payload[name] == release[name], f'Upstream binary changed: {name}'
     assert payload[UPD + 'Stock/gal.real'] == payload[UPD + 'Stock/gal.reference'] == stock
@@ -148,17 +154,26 @@ def validate_payload(payload, release, stock):
     for forbidden in ('Mods/ClusterIntegration/uninstall.txt', 'Mods/ClusterIntegration/enable_carplay.txt',
                       'Mods/ClusterIntegration/force_install.txt', 'cluster_config.json'):
         assert forbidden not in payload, forbidden
-    aa_names = [n for n in binaries if '/aa_only/' in n]
+    aa_names = [n for n in payload if n.startswith(UPD + 'aa_only/') and n.endswith('.jar')]
     assert len(aa_names) == 1
     import io
     with zipfile.ZipFile(io.BytesIO(payload[aa_names[0]])) as jar:
         assert not any(n.startswith('de/audi/app/terminalmode/smartphone/carplay/') for n in jar.namelist())
         assert any(n.endswith('/AndroidAuto2EventListener.class') for n in jar.namelist())
+        if port is not None:
+            assert any(n.endswith('/ClusterLifecycle.class') for n in jar.namelist())
+            assert any(n.endswith('/ClusterLifecycleFiles.class') for n in jar.namelist())
+    if port is not None:
+        assert payload[UPD + 'cluster'] == port['cluster']
+        assert payload[UPD + 'gal_cluster.so'] == port['gal_cluster.so']
+        assert payload[aa_names[0]] == port[PORT_JAR]
+        assert config['config']['enableLifecyclePort'] is True
+        assert b'GAL_CLUSTER_LIFECYCLE=1\n' in payload['Mods/ClusterIntegration/gal_env.txt']
     for name, data in payload.items():
         if name.endswith('.sh'):
             assert b'\r\n' not in data, name
     return dict(signed_files_unchanged=len(protected), upstream_binaries_unchanged=len(binaries),
-                diagnostic_mode=True, contains_local_lifecycle_changes=False, car_tested=False)
+                diagnostic_mode=True, contains_local_lifecycle_changes=port is not None, car_tested=False)
 
 
 def main():
@@ -166,7 +181,11 @@ def main():
     p.add_argument('--release', type=Path, default=ROOT / 'builds/ClusterIntegration_v0034_beta2_candidate_90d0b76_audi.zip')
     p.add_argument('--stock-gal', type=Path, required=True)
     p.add_argument('--output-directory', type=Path, required=True)
+    p.add_argument('--port-artifacts', type=Path, help='Matched output of port_build.py java and native; required for our disconnect/reconnect changes')
     args = p.parse_args()
+    # Validate before creating anything. A Java-only build is not a vehicle
+    # package; reject it rather than silently retaining upstream native files.
+    port = validate_artifacts(args.port_artifacts) if args.port_artifacts else None
     release_data = args.release.read_bytes()
     assert sha(release_data) == RELEASE_SHA, 'Wrong upstream release ZIP'
     stock = args.stock_gal.read_bytes()
@@ -191,19 +210,56 @@ def main():
     payload['Mods/ClusterIntegration/diag.txt'] = b'diagnostic first pass\n'
     payload['Mods/ClusterIntegration/config_overrides.txt'] = b'enableMapRender=false\n'
     payload['Mods/ClusterIntegration/gal_env.txt'] = b'GAL_CLUSTER_LOG=1\nGAL_CLUSTER_LOG_ALL=1\nGAL_CLUSTER_LOG_DETAILS=1\nGAL_CLUSTER_SD_LOG=1\n'
+    if port is not None:
+        for name in list(payload):
+            if name.startswith(UPD) and name.endswith('.jar'):
+                rel = name[len(UPD):]
+                if rel.startswith('aa_only/') or '/' not in rel:
+                    del payload[name]
+        payload[UPD + PORT_JAR] = port[PORT_JAR]
+        payload[UPD + 'aa_only/' + PORT_JAR] = port[PORT_JAR]
+        for name in ('cluster', 'gal_cluster.so', 'cluster_config.json'):
+            payload[UPD + name] = port[name]
+        payload['Mods/ClusterIntegration/gal_env.txt'] += b'GAL_CLUSTER_LIFECYCLE=1\n'
+        payload['Mods/ClusterIntegration/config_overrides.txt'] += b'enableLifecyclePort=true\n'
+        payload['Recovery/java-build.json'] = port['java-build.json']
+        payload['Recovery/native-build.json'] = port['native-build.json']
     payload['failsafe.sh'] = (ROOT / 'modkit/sd_failsafe.sh').read_bytes().replace(b'\r\n', b'\n')
     payload[UPD + 'Stock/gal.real'] = stock
     payload[UPD + 'Stock/gal.reference'] = stock
     payload['Recovery/RECOVERY_LOGGING.md'] = (ROOT / 'modkit/RECOVERY_LOGGING.md').read_bytes().replace(b'\r\n', b'\n')
     payload['Recovery/upstream-README.md'] = release['README.md']
-    payload['README.md'] = GUIDE.encode('utf-8')
+    if port is None:
+        guide = GUIDE
+    else:
+        guide = '''# Audi MIB2p lifecycle port — first diagnostic test
+
+This package contains our rebuilt disconnect/reconnect Java lifecycle,
+GAL receiver generation guards, v2 shared ring and leased native player.
+The modified Java and both ARM/QNX binaries have matching source/build
+receipts. It remains an untested vehicle candidate: compilation and host
+tests do not prove Screen output, OEM hand-back or QNX J9 atomic rename.
+The IMapClusterService restore route needs car verification; absence of
+that service blocks a later takeover rather than forcing an OEM display.
+
+The first pass enables the lifecycle implementation but disables map
+rendering and video service injection. After diagnostic review, enable
+rendering through configuration; never substitute upstream native binaries.
+The verbose stock rollback and saved original GAL are included.
+
+''' + GUIDE[GUIDE.index('## Copy to SD'):]
+        guide = guide.replace('The native/Java binaries are preserved\nfrom the pinned upstream release. Our receiver generation patch is absent.',
+                              'The native/Java lifecycle binaries are rebuilt together. The unchanged\nAudi dependency stub and ModKit update framework come from the pinned release.')
+    payload['README.md'] = guide.encode('utf-8')
     payload['VERIFY-CARD.ps1'] = VERIFY_PS.encode('utf-8')
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    receipt = dict(schema=1, kind='upstream-audi-diagnostic-with-verbose-stock-rollback',
+    receipt = dict(schema=1, kind=('local-lifecycle-diagnostic-with-stock-rollback' if port else 'upstream-audi-diagnostic-with-verbose-stock-rollback'),
                    prepared_date='2026-10-14', firmware='MH2p_ER_AUG35_P2873',
                    script_commit=commit, upstream_commit='ae1b8fe3a6a679f33dee9a93ab7adf43772c83d0',
                    release_sha256=RELEASE_SHA, saved_gal_sha256=STOCK_SHA,
-                   **validate_payload(payload, release, stock))
+                   **validate_payload(payload, release, stock, port))
+    if port is not None:
+        receipt['port_source_fingerprint'] = fingerprint()
     payload['Recovery/package-provenance.json'] = (json.dumps(receipt, indent=2) + '\n').encode()
     payload['SHA256SUMS'] = ''.join(f'{sha(data)}  {name}\n' for name, data in sorted(payload.items())).encode('ascii')
     output = args.output_directory.resolve()
@@ -228,7 +284,7 @@ def main():
         assert z.testzip() is None
         final = {name: z.read(name) for name in z.namelist()}
         assert final == payload
-        validate_payload(final, release, stock)
+        validate_payload(final, release, stock, port)
         for row in final['SHA256SUMS'].decode().splitlines():
             expected, name = row.split('  ', 1)
             assert sha(final[name]) == expected

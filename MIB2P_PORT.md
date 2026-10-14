@@ -246,3 +246,34 @@ of our disconnect/reconnect implementation. Rebuilding that still requires
 matched QNX/ARM and Java outputs. The prepared card's rollback restores stock
 GAL and removes this mod's added Java/native files; stock JARs and NavCompass
 remain. Runtime recovery writes and early boot execution must be tested on QNX.
+
+## Matched lifecycle package preparation (2026-10-14)
+
+`modkit/port_build.py java` now builds a fresh AA-only JAR containing 26 Java
+1.4 classes against the pinned saved P2873 API. It rebuilds the complete
+Subsystem and Integration outer/inner families, event listener, lifecycle
+helpers and map controller. The unused stale Activator and the mirror
+placeholder requiring an unavailable IWidgetContext are excluded. External
+and embedded config are identical: lifecycle enabled, rendering disabled for
+the first diagnostic pass. The JAR alone is not a matched vehicle package.
+
+`modkit/port_build.py native` is the QNX 6.6 ARMv7 build recipe for the modified
+hook/player. Both artifacts embed the complete source fingerprint, and their
+build receipt records their hashes and toolchain. The SDK is not installed;
+the recipe has not compiled against QNX. The native prerequisite check was
+run in the existing WSL2 Ubuntu-22.04 and correctly stopped for missing qcc.
+
+`modkit/build_audi_sd.py --port-artifacts build-local/port-artifacts ...` now
+assembles the actual port rather than the release: it replaces the AA JAR,
+GAL hook, player and config together and adds GAL_CLUSTER_LIFECYCLE=1. It
+rejects missing native receipts, old upstream binaries, wrong file sets,
+modified files or stale fingerprints before creating a card directory/ZIP.
+Default invocation without --port-artifacts still creates the separate
+upstream diagnostic package. No patched SD ZIP has been emitted yet.
+
+See [WSL/QNX build instructions](modkit/QNX_WSL_BUILD.md) for the official
+legacy SDK download/login link and commands. WSL2 is a plausible build host;
+SDP 6.6 officially documented Ubuntu 12.04, so Ubuntu 22.04 compatibility
+needs testing with the actual licensed tools. No SDK installation or license
+activation was performed. PC lifecycle and packaging checks do not establish
+QNX loading, presentation or physical OEM map restoration.
