@@ -92,7 +92,8 @@ The `cluster` daemon in the zip is upstream's build with the `src/cluster.c` cha
 
 ## Known limits
 
-- **HUD:** no arrows or distance on the head-up display, only the street name. With the cockpit coded for the map (`navMapTransmissionMode=3`), the head unit drops the BAP arrow data.
+- **Android Auto only.** This build targets Android Auto. CarPlay is **not enabled** (`enable_carplay.txt` is not set). Upstream's Audi CarPlay hook patches iAP2 Identify requests with Porsche-derived object layouts and has broken CarPlay on untested Audi firmware (see the main repo's Audi section). CarPlay users should wait for Q7-specific CarPlay testing or use upstream's default build. The cockpit-framing fixes here (insets, DPI, car centering) are in `gal_cluster.so`, which only hooks Android Auto's `gal` process — CarPlay goes through `dio_manager` and would need equivalent framing patches we have not built or tested.
+- **HUD:** no arrows or distance on the head-up display, only the street name. With the cockpit coded for the map (`navMapTransmissionMode=3`), the head unit drops the BAP arrow data, and the HUD arrow renderer in `navStartup` only draws while Audi's own route guidance is active. Running Audi native navigation alongside Google Maps gives you Audi's HUD arrows and junction views, with Google in the cockpit — a working daily workaround.
 - **Center screen:** while the cockpit map is active, it shows Google's route overview. That's Google's design for cars with a cluster display.
 - **Frame rate:** about 10–15 fps while the map rotates. The phone's encoder limits this; the head unit decodes every frame.
 - **Native map:** the Audi navigation map is hidden while Android Auto video runs in the cockpit, and comes back when AA disconnects.
