@@ -368,6 +368,7 @@ IDSIControllerStateListener {
     }
 
     public void init() {
+        if (this.clusterIntegration != null) this.clusterIntegration.initializeLifecycle();
         this.dsiController.init();
         this.dsiController.setStateListener((IDSIControllerStateListener)this);
     }

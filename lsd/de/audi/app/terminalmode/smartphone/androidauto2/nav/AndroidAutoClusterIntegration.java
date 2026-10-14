@@ -2049,6 +2049,7 @@ public class AndroidAutoClusterIntegration implements DSIAndroidAuto2ListenerSaf
     public synchronized void navFocusRequestNotification(NavigationFocusType navFocusType, int validFlag) {
         if (!aaSessionActive || validFlag != 1 || navFocusType == null) return;
         boolean isProjected = navFocusType.equals(NavigationFocusType.PROJECTED);
+        boolean wasProjected = this.navigationActive;
         this.navigationActive = isProjected;
 
         // Log Android Auto DSI input
@@ -2080,7 +2081,7 @@ public class AndroidAutoClusterIntegration implements DSIAndroidAuto2ListenerSaf
         } else {
             // Stop heartbeat when switching to native nav
             stopHeartbeat();
-            clearCluster();
+            if (wasProjected) clearCluster();
             destinationEventSeen = false;  // Reset for next navigation session
         }
     }
@@ -3030,6 +3031,7 @@ public class AndroidAutoClusterIntegration implements DSIAndroidAuto2ListenerSaf
     }
 
     private void retireBAP() {
+        boolean hadBAP = navigationActive || lastManeuverArray != null || lastDisplayValue >= 0;
         ++bapGeneration;
         navigationActive = false;
         stopHeartbeat(); cancelPendingClear();
@@ -3042,7 +3044,7 @@ public class AndroidAutoClusterIntegration implements DSIAndroidAuto2ListenerSaf
         lastEventCode = -1; lastTurnSide = -1; lastDistance = -1; lastUpdateTime = 0;
         cachedRoundaboutDirection = -1; resetManeuverOnNextDistance = false;
         waitingForPostTurnTurnEvent = false; resetCameFromRoundabout = false;
-        doClearCluster(); // immediate; an arrival timer must not cross sessions
+        if (hadBAP) doClearCluster(); // never clear OEM guidance when we owned no BAP output
         logCluster("LIFECYCLE: BAP retired generation=" + bapGeneration);
     }
 
@@ -3182,6 +3184,15 @@ public class AndroidAutoClusterIntegration implements DSIAndroidAuto2ListenerSaf
             + " panX=" + mirrorPanX + " panY=" + mirrorPanY);
     }
 
+    public synchronized void initializeLifecycle() {
+        if (!lifecycleDisposed) return;
+        if (lifecycleWorker != null && lifecycleWorker.isAlive()) {
+            logCluster("LIFECYCLE: previous worker not joined; refusing overlapping owner"); return;
+        }
+        lifecycleWorker = null; lifecycle = null; lifecycleIdentity = null;
+        lifecycleDisposed = false; aaSessionActive = false;
+    }
+
     public void publish(String record) throws Exception {
         ClusterLifecycleFiles.publish(ClusterLifecycleFiles.REQUEST, record, lifecycleIdentity);
     }
@@ -3215,19 +3226,19 @@ public class AndroidAutoClusterIntegration implements DSIAndroidAuto2ListenerSaf
         // Give the live owner time to receive the exit acknowledgement before
         // closing services. Join OUTSIDE its monitor. On failure, the native
         // lease still expires; no unconfirmed display restore is reported.
-        long deadline = System.currentTimeMillis() + 3500;
-        while (worker != null && System.currentTimeMillis() < deadline) {
+        for (int attempt = 0; worker != null && attempt < 70; ++attempt) {
             synchronized (this) {
                 if (lifecycle == null || !lifecycle.restorationPending()) break;
             }
             try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
         }
-        synchronized (this) { lifecycleDisposed = true; lifecycleWorker = null; }
+        synchronized (this) { lifecycleDisposed = true; }
         if (worker != null && worker != Thread.currentThread()) {
             worker.interrupt();
             try { worker.join(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             if (worker.isAlive()) logCluster("LIFECYCLE: worker join incomplete; native lease recovery required");
         }
+        synchronized (this) { if (worker == null || !worker.isAlive()) lifecycleWorker = null; }
     }
 
     public void audioFocusRequestNotification(int focus, int validFlag) {
