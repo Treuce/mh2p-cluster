@@ -2,7 +2,9 @@
 
 Google Maps from Android Auto, full width in the Virtual Cockpit. It shows the 3D driving view with the turn card, and the car marker stays above Audi's bottom info bar. It works over a cable and through wireless Android Auto adapters.
 
-**Download:** [`builds/ClusterIntegration_v0034_q7_p2711_audi.zip`](../../builds/ClusterIntegration_v0034_q7_p2711_audi.zip)
+**Download:** `ClusterIntegration_v0034_q7_p2711_audi.zip` from the [latest release](https://github.com/bhushangahire/mh2p-cluster/releases/latest), or from [`builds/`](../../builds/ClusterIntegration_v0034_q7_p2711_audi.zip) in this repo (open it and click the download button).
+
+> Don't use GitHub's green **Code → Download ZIP** button. That downloads the project's source code, which the car can't install.
 
 **Tested on:**
 - Car: 2020 Audi Q7 (US) with the Virtual Cockpit.
@@ -14,16 +16,33 @@ Other MH2p Audis with the same 1920×722 cockpit should be close but are unteste
 
 ## Install
 
-**Requirements:** Android Auto already working on the car, and LawPaul's [NaviCompassIgnore](https://github.com/LawPaul) installed (otherwise the cockpit falls back to the compass once navigation starts). Read the main README's Audi section first.
+**Requirements:** Android Auto already working on the car, and the car parked. Read the main README's Audi section first.
 
-1. Extract the zip to an empty FAT32 SD card. It already includes LawPaul's MH2p SD ModKit v2 loader (`Data/`, `Meta/`), unmodified, as upstream's Audi zip does.
-2. Parked, with the engine running: insert the card and run the ModKit installation as described on [LawPaul's ModKit site](https://lawpaul.github.io/MH2p_SD_ModKit_Site/).
-3. The installer backs up every file it replaces to `Mods/ClusterIntegration/Update/Backup/` on the card. Copy that folder somewhere safe.
-4. Plug in the phone and start Google Maps navigation. The cockpit map should appear on the first connection.
+The zip contains everything for one SD card:
+
+| Folder | What it is |
+|---|---|
+| `Data/`, `Meta/` | LawPaul's MH2p SD ModKit v2 loader, unmodified. It lets the head unit install the mods. |
+| `Mods/ClusterIntegration/` | This mod. |
+| `Mods/NavCompassIgnore/` | LawPaul's NavCompassIgnore, unmodified. Without it the cockpit switches to the compass once navigation starts. If you already have it installed, installing it again is harmless. |
+
+1. Format an SD card as **FAT32**. 32 GB or smaller is easiest; for larger cards, Windows can't format FAT32, so use Rufus or Raspberry Pi Imager.
+2. Extract the zip, then copy what's **inside** it to the **root** of the card. When you open the card you must see `Data`, `Meta` and `Mods` immediately, not inside another folder. "Extract All" usually creates a folder named after the zip; copy its contents, not the folder.
+3. On a Mac, remove the hidden `._` files macOS adds, or the update may not start: `dot_clean -m /Volumes/<card name>`.
+4. Start the engine, then insert the card (lock switch unlocked). The head unit reboots and the update starts by itself within about 10 seconds. Don't touch the screen. It reboots several times, and red engineering pages may appear.
+5. When asked to remove the update media, remove the card. The head unit restarts normally.
+6. Copy `Mods/ClusterIntegration/Update/Backup/` from the card somewhere safe. The installer saves every file it replaced there.
+7. Plug in the phone and start Google Maps navigation. The cockpit map should appear on the first connection.
 
 If you use a wireless adapter with its own DPI setting, keep it moderate (150 worked). Some custom values made the phone drop the cockpit display.
 
-**Uninstall:** put an empty `uninstall.txt` in `Mods/ClusterIntegration/` on the card and run the ModKit again. It restores the backed-up originals.
+**If the update doesn't start:**
+- Nothing happens, or "update not supported": usually `Data`/`Meta` aren't at the card root, the card isn't FAT32, or macOS `._` files are present (steps 1–3).
+- "BEM level is set to LEVEL 1": the engine isn't running.
+- Error partway through: reformat the card or try another card.
+- Check the head unit is MH2p: the MMI version should start with `MH2P_`.
+
+**Uninstall:** put an empty `uninstall.txt` in `Mods/ClusterIntegration/` (and in `Mods/NavCompassIgnore/` to remove that too) and install the card again. ClusterIntegration restores the backed-up originals.
 
 ## Turning logs on (troubleshooting)
 
@@ -82,7 +101,7 @@ The `cluster` daemon in the zip is upstream's build with the `src/cluster.c` cha
 
 - **fifthBro:** the original MH2p cluster integration (hook, daemon, Java integration). https://fifthbro.github.io
 - **jonny190/mh2p-cluster:** the Audi package this builds on, with Jonathan Davey and jakublamik. https://github.com/jonny190/mh2p-cluster
-- **LawPaul:** MH2p SD ModKit (the loader in the zip's `Data/` and `Meta/` is his signed ModKit v2, included unmodified), NaviCompassIgnore and SSH access. https://lawpaul.github.io/MH2p_SD_ModKit_Site/
+- **LawPaul:** MH2p SD ModKit (the zip's `Data/` and `Meta/` are his signed ModKit v2, unmodified) and NavCompassIgnore (`Mods/NavCompassIgnore/`, unmodified from [LawPaul/MH2p_NavCompassIgnore](https://github.com/LawPaul/MH2p_NavCompassIgnore) at `1dc404c`), both CC BY-NC-SA 4.0; also SSH access. https://lawpaul.github.io/MH2p_SD_ModKit_Site/
 - **luka-dev:** mib2q-carplay-rgi, navigation event research used upstream. https://github.com/luka-dev/mib2q-carplay-rgi
 - **Q7 P2711 fixes and profile:** Bhushan Ahire.
 
@@ -90,4 +109,4 @@ The `cluster` daemon in the zip is upstream's build with the `src/cluster.c` cha
 
 Same as the rest of this repository: [CC BY-NC-SA 4.0](../../LICENSE.md). Non-commercial use only. Changes from upstream are listed above.
 
-The zip contains no Audi, Harman or Google files. The ModKit loader in it belongs to LawPaul and keeps its own terms. Not affiliated with or endorsed by Audi, Volkswagen Group, Harman or Google. "Audi", "Android Auto" and "Google Maps" are trademarks of their owners and are used only to describe compatibility. Use at your own risk; modifying the head unit may affect your warranty.
+The zip contains no Audi, Harman or Google files. The ModKit loader and NavCompassIgnore in it are LawPaul's work, included unmodified under their CC BY-NC-SA 4.0 license. Not affiliated with or endorsed by Audi, Volkswagen Group, Harman or Google. "Audi", "Android Auto" and "Google Maps" are trademarks of their owners and are used only to describe compatibility. Use at your own risk; modifying the head unit may affect your warranty.
