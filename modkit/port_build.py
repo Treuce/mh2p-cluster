@@ -11,6 +11,7 @@ import struct
 import subprocess
 import tempfile
 import zipfile
+import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 AA = 'de/audi/app/terminalmode/smartphone/androidauto2/'
@@ -147,17 +148,58 @@ def validate_artifacts(directory):
     return result
 
 
+def stage_vm(args):
+    stage = Path(tempfile.mkdtemp(prefix='ubuntu1204-source-', dir=args.output))
+    entries = sources()
+    for name in entries:
+        destination = stage / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, destination)
+    for name in ('native_vm_build.sh', 'native_vm_receipt.py'):
+        (stage / name).write_bytes((ROOT / 'modkit' / name).read_bytes().replace(b'\r\n', b'\n'))
+    shutil.copyfile(ROOT / 'LICENSE.md', stage / 'LICENSE.md')
+    (stage / 'source-manifest.json').write_text(json.dumps(dict(source_fingerprint=fingerprint(), files=entries), indent=2) + '\n')
+    run([os.sys.executable, stage / 'native_vm_receipt.py', 'check'])
+    with tarfile.open(stage.with_suffix('.tar.gz'), 'w:gz') as archive:
+        archive.add(stage, arcname='audi-qnx-source')
+    print(f'Ubuntu 12.04 source bundle: {stage.with_suffix(".tar.gz")}')
+
+
+def import_vm(args):
+    if not args.native_directory:
+        raise RuntimeError('Specify --native-directory containing the two VM outputs and native-build.json')
+    incoming = args.native_directory
+    receipt = json.loads((incoming / 'native-build.json').read_text())
+    if receipt['kind'] != 'local-port-qnx-native' or receipt['source_fingerprint'] != fingerprint():
+        raise ValueError('VM build uses stale/wrong source fingerprint')
+    if set(receipt['files']) != {'gal_cluster.so', 'cluster'}:
+        raise ValueError('VM build has wrong file set')
+    for name, expected in receipt['files'].items():
+        data = (incoming / name).read_bytes()
+        if sha(data) != expected:
+            raise ValueError(f'VM output changed: {name}')
+        arm_elf(data, name)
+    # Validate every incoming output before replacing any desktop artifact.
+    for name in ('gal_cluster.so', 'cluster', 'native-build.json'):
+        shutil.copyfile(incoming / name, args.output / name)
+    validate_artifacts(args.output)
+    print('Imported and validated matched VM native + desktop Java artifacts')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('part', choices=['java', 'native', 'validate'])
+    p.add_argument('part', choices=['java', 'native', 'validate', 'stage-vm', 'import-vm'])
     p.add_argument('--output', type=Path, default=ROOT / 'build-local/port-artifacts')
     p.add_argument('--stock-api', type=Path, default=ROOT.parent / 'mib2p-android-auto-cluster/android_auto/mh2p/build-java-routing-transport/stock-api.jar')
     p.add_argument('--ecj', type=Path, default=ROOT.parent / 'mib2p-android-auto-cluster/android_auto/mh2p/build-java-tools/ecj-4.20.jar')
     p.add_argument('--java-home', type=Path, default=Path('C:/Program Files/Java/jdk-23'))
+    p.add_argument('--native-directory', type=Path)
     args = p.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     if args.part == 'java': build_java(args)
     elif args.part == 'native': build_native(args)
+    elif args.part == 'stage-vm': stage_vm(args)
+    elif args.part == 'import-vm': import_vm(args)
     else: print(f'Validated {len(validate_artifacts(args.output))} matched artifact files')
 
 

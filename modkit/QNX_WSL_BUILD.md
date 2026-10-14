@@ -4,6 +4,11 @@ The installed `Ubuntu-22.04` distribution is WSL2 and was inspected on
 2026-10-14. It has GCC but no QNX compiler. Ordinary Ubuntu GCC cannot build
 programs for the QNX MMI. No SDK, license or WSL packages were installed.
 
+An Ubuntu 12.04 Hyper-V build VM has since been created with the official
+installer attached. Use [the VM setup guide](QNX_VM_SETUP.md) for that route.
+The VM recipe supports its older Python; Java and final SD assembly stay on
+Windows. Ubuntu and the QNX SDK still need installing inside the guest.
+
 WSL2 can host QNX Linux development tools. QNX publishes a
 [WSL2 guide for SDP 8.0](https://devblog.qnx.com/using-qnx-with-wsl2/), but that
 is not evidence of compatibility with this QNX 6.6 ARM target. The matching
