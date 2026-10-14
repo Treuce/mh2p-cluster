@@ -42,7 +42,7 @@ typedef struct {
     volatile uint32_t magic, lock, live;
     uint32_t version, bytes, writer_pid;
     m2_stamp stamp;
-    uint32_t published, consumed, reader[4], codec_length, codec_ready, keyframe;
+    uint32_t published, consumed, reader[4], reader_pid, codec_length, codec_ready, keyframe;
     uint8_t codec[M2_CODEC_MAX];
     m2_packet packets[M2_SLOTS];
 } cluster_h264_shm_t;
@@ -67,7 +67,7 @@ M2_INLINE int m2_begin(cluster_h264_shm_t *s,uint32_t receiver,uint32_t stream) 
     }
     m2_stop(s);
     s->stamp.receiver=receiver; s->stamp.stream=stream; s->published=s->consumed=0;
-    s->codec_length=s->codec_ready=s->keyframe=0; memset(s->reader,0,16);
+    s->codec_length=s->codec_ready=s->keyframe=s->reader_pid=0; memset(s->reader,0,16);
     for(i=0;i<M2_SLOTS;++i) s->packets[i].sequence=0;
     m2_store(&s->live,1); m2_unlock(s); return M2_PACKET;
 }
@@ -111,15 +111,16 @@ M2_INLINE int m2_publish(cluster_h264_shm_t *s,const m2_stamp *stamp,const uint8
     packet->sequence=++s->published; s->keyframe=1;
     m2_unlock(s); return result;
 }
-M2_INLINE int m2_claim(cluster_h264_shm_t *s,m2_reader *r,const uint32_t identity[4]) {
+M2_INLINE int m2_claim_pid(cluster_h264_shm_t *s,m2_reader *r,const uint32_t identity[4],uint32_t pid) {
     static const uint32_t zero[4]={0,0,0,0};
     if(!memcmp(identity,zero,16) || !m2_valid(s)) return M2_INVALID;
     if(!m2_lock(s)) return M2_BUSY;
     if(!m2_load(&s->live)) { m2_unlock(s); return M2_EMPTY; }
     if(memcmp(s->reader,zero,16)) { m2_unlock(s); return M2_BUSY; }
-    memset(r,0,sizeof(*r)); r->stamp=s->stamp; memcpy(r->identity,identity,16); memcpy(s->reader,identity,16);
+    memset(r,0,sizeof(*r)); r->stamp=s->stamp; memcpy(r->identity,identity,16); memcpy(s->reader,identity,16); s->reader_pid=pid;
     m2_unlock(s); return M2_PACKET;
 }
+M2_INLINE int m2_claim(cluster_h264_shm_t *s,m2_reader *r,const uint32_t identity[4]) { return m2_claim_pid(s,r,identity,0); }
 M2_INLINE int m2_matches(cluster_h264_shm_t *s,const m2_reader *r) {
     int valid;
     if(!m2_valid(s) || !m2_load(&s->live)) return M2_STALE;
@@ -155,7 +156,7 @@ M2_INLINE int m2_read(cluster_h264_shm_t *s,m2_reader *r,uint8_t *out,uint32_t c
 M2_INLINE int m2_release(cluster_h264_shm_t *s,const m2_reader *r) {
     if(!m2_lock(s)) return M2_BUSY;
     if(!m2_equal(&s->stamp,&r->stamp) || memcmp(s->reader,r->identity,16)) { m2_unlock(s); return M2_STALE; }
-    memset(s->reader,0,16); m2_unlock(s); return M2_PACKET;
+    memset(s->reader,0,16); s->reader_pid=0; m2_unlock(s); return M2_PACKET;
 }
 
 #endif

@@ -54,6 +54,7 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <time.h>
+#include "cluster_player_generation.h"
 
 /* SCREEN_FORMAT_YV12 — used in h264 mode for the decode window */
 #define SCREEN_FORMAT_YV12  13
@@ -1711,7 +1712,7 @@ static int setup_screen(int width, int height) {
         int br = screen_blit(g_dec.scr_ctx, g_dec.post_bufs[pidx],
                              g_dec.boot_pix_buf, ba);
         int dirty[4] = { 0, 0, width, height };
-        screen_post_window(g_dec.post_win, g_dec.post_bufs[pidx], 1, dirty, 0);
+        m2_player_post(g_dec.post_win, g_dec.post_bufs[pidx], 1, dirty, 0);
         screen_flush_context(g_dec.scr_ctx, 0);
         g_boot_splash_until_ms         = now_us() / 1000ULL + 2000ULL;
         g_boot_splash_shown_in_session = 1;
@@ -1924,7 +1925,7 @@ static void apply_stage_signals(void) {
             int br = screen_blit(g_dec.scr_ctx, g_dec.post_bufs[pidx],
                                  g_dec.boot_pix_buf, ba);
             int dirty[4] = { 0, 0, g_dec.width, g_dec.height };
-            screen_post_window(g_dec.post_win, g_dec.post_bufs[pidx],
+            m2_player_post(g_dec.post_win, g_dec.post_bufs[pidx],
                                1, dirty, 0);
             screen_flush_context(g_dec.scr_ctx, 0);
             g_boot_splash_until_ms         = now_us() / 1000ULL + 2000ULL;
@@ -1946,7 +1947,7 @@ static void apply_stage_signals(void) {
             int br = screen_blit(g_dec.scr_ctx, g_dec.post_bufs[pidx],
                                  g_dec.canim_pix_buf, blit_attribs);
             int dirty[4] = { 0, 0, g_dec.width, g_dec.height };
-            screen_post_window(g_dec.post_win, g_dec.post_bufs[pidx],
+            m2_player_post(g_dec.post_win, g_dec.post_bufs[pidx],
                                1, dirty, 0);
             screen_flush_context(g_dec.scr_ctx, 0);
             LOG("h264: pause → PAUSED, canim blit rc=%d posted to pidx=%d "
@@ -1970,7 +1971,7 @@ static void apply_stage_signals(void) {
         int idx = (g_dec.post_buf_idx == 0)
                       ? (MAX_SURFACES - 1) : (g_dec.post_buf_idx - 1);
         int dirty[4] = { 0, 0, g_dec.width, g_dec.height };
-        screen_post_window(g_dec.post_win, g_dec.post_bufs[idx], 1, dirty, 0);
+        m2_player_post(g_dec.post_win, g_dec.post_bufs[idx], 1, dirty, 0);
         screen_flush_context(g_dec.scr_ctx, 0);
         g_boot_splash_post_done = 1;
         g_last_posted_pidx      = idx;
@@ -1986,7 +1987,7 @@ static void apply_stage_signals(void) {
         uint64_t now_ms = now_us() / 1000ULL;
         if (now_ms - g_last_post_ms > 50) {
             int dirty[4] = { 0, 0, g_dec.width, g_dec.height };
-            screen_post_window(g_dec.post_win,
+            m2_player_post(g_dec.post_win,
                                g_dec.post_bufs[g_last_posted_pidx],
                                1, dirty, 0);
             screen_flush_context(g_dec.scr_ctx, 0);
@@ -2143,7 +2144,7 @@ static int cb_display_picture(void* user, void* disp_info) {
      * re-posts the splash buffer every ~50ms during the window. */
     if (g_render_stage == STAGE_RENDERING &&
         (now_us() / 1000ULL) >= g_boot_splash_until_ms) {
-        screen_post_window(g_dec.post_win, g_dec.post_bufs[pidx], 1, dirty, 0);
+        m2_player_post(g_dec.post_win, g_dec.post_bufs[pidx], 1, dirty, 0);
         screen_flush_context(g_dec.scr_ctx, 0);
         g_last_posted_pidx = pidx;
         g_last_post_ms     = now_us() / 1000ULL;
@@ -2344,44 +2345,39 @@ int run_h264_mode(int argc, char** argv) {
         g_h264_args.mode, g_h264_args.zoomX, g_h264_args.zoomY,
         g_h264_args.panX, g_h264_args.panY, g_h264_args.xres, g_h264_args.yres);
 
-    /* Open SHM */
-    LOG("waiting for SHM %s...\n", CLUSTER_SHM_NAME);
-    int sfd = -1;
-    while (sfd < 0) { sfd = shm_open(CLUSTER_SHM_NAME, O_RDONLY, 0); usleep(500000); }
-    cluster_h264_shm_t* shm = (cluster_h264_shm_t*)mmap(NULL, sizeof(*shm),
-        PROT_READ, MAP_SHARED, sfd, 0);
-    close(sfd);
-    if (shm == MAP_FAILED) { perror("mmap"); return 1; }
-
-    while (shm->magic != CLUSTER_SHM_MAGIC) usleep(100000);
-    LOG("SHM active\n");
-
-    /* Dump mode */
-    if (dump_mode) {
-        int out_fd = open("/tmp/cluster_from_shm.h264", O_WRONLY|O_CREAT|O_TRUNC, 0644);
-        uint32_t read_pos = shm->write_pos;
-        uint32_t last_total = shm->total_bytes;
-        int dump_bytes = 0;
-        uint64_t t0 = now_us();
-        LOG("dumping...\n");
-        while (dump_bytes < 4*1024*1024) {
-            uint32_t total = shm->total_bytes;
-            if (total == last_total) { usleep(1000); if (dump_bytes>0 && now_us()-t0>10000000ULL) break; continue; }
-            t0 = now_us();
-            uint32_t wp = shm->write_pos;
-            uint32_t avail = (wp >= read_pos) ? wp-read_pos : CLUSTER_RING_SIZE-read_pos+wp;
-            if (avail > 0 && out_fd >= 0) {
-                if (read_pos+avail <= CLUSTER_RING_SIZE) { write(out_fd, shm->ring+read_pos, avail); }
-                else { uint32_t f=CLUSTER_RING_SIZE-read_pos; write(out_fd,shm->ring+read_pos,f); write(out_fd,shm->ring,avail-f); }
-                read_pos = (read_pos+avail) % CLUSTER_RING_SIZE;
-                dump_bytes += avail;
+    /* Require an exact v2 mapping and claim one immutable native connection. */
+    signal(SIGTERM,m2_player_signal); signal(SIGINT,m2_player_signal);
+    uint64_t connect_deadline=now_us()+5000000ULL;
+    cluster_h264_shm_t *shm=NULL;
+    while(!g_m2_player_quit && now_us()<connect_deadline) {
+        int fd=shm_open(CLUSTER_SHM_NAME,O_RDWR,0); struct stat st;
+        if(lifecycle_parent>0 && getppid()!=lifecycle_parent) return 1;
+        if(fd>=0) {
+            if(!fstat(fd,&st) && st.st_size==(off_t)sizeof(*shm))
+                shm=(cluster_h264_shm_t*)mmap(NULL,sizeof(*shm),PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
+            close(fd);
+            if(shm && shm!=MAP_FAILED && m2_valid(shm)) {
+                m2_player_reap_reader(shm);
+                if(m2_player_claim(shm)==M2_PACKET) break;
             }
-            last_total = total;
-            if ((dump_bytes%(100*1024))<1000) LOG("  %d KB\n", dump_bytes/1024);
+            if(shm && shm!=MAP_FAILED) munmap(shm,sizeof(*shm)); shm=NULL;
         }
-        close(out_fd);
-        LOG("done: %d bytes\n", dump_bytes);
-        return 0;
+        usleep(10000);
+    }
+    if(!shm || g_m2_player_quit) { LOG("generation: no claimable v2 stream; refusing decode\n"); return 1; }
+    LOG("generation: bound writer=%u receiver=%u stream=%u\n",shm->writer_pid,
+        g_m2_player_reader.stamp.receiver,g_m2_player_reader.stamp.stream);
+    if(dump_mode) {
+        uint8_t *bytes=(uint8_t*)malloc(M2_PACKET_MAX); uint32_t length,flags;
+        int output=open("/tmp/cluster_from_shm.h264",O_WRONLY|O_CREAT|O_TRUNC,0644);
+        uint32_t dumped=0; uint64_t timeout=now_us()+10000000ULL;
+        if(bytes && output>=0) while(!g_m2_player_quit && dumped<4*1024*1024 && now_us()<timeout) {
+            int result=m2_read(shm,&g_m2_player_reader,bytes,M2_PACKET_MAX,&length,&flags);
+            if(result<0 || !m2_player_public_matches()) break;
+            if(result==M2_PACKET) { write(output,bytes,length); dumped+=length; }
+            else usleep(1000);
+        }
+        if(output>=0) close(output); free(bytes); m2_release(shm,&g_m2_player_reader); return 0;
     }
 
     /* ---- Decode mode ---- */
@@ -2446,56 +2442,36 @@ int run_h264_mode(int argc, char** argv) {
         }
     }
 
-    /* Main decode loop: read from SHM, feed to parser. Start from CURRENT
-     * write position so we get fresh data with valid NAL boundaries. */
-    uint32_t read_pos = shm->write_pos;
-    uint32_t last_total = shm->total_bytes;
-    int feed_count = 0;
-    uint64_t t0 = now_us();
-    (void)t0;
-
-    LOG("decode loop started (wp=%u total=%u, waiting for NEW H.264 data)...\n",
-        read_pos, last_total);
-
-    while (1) {
-        if (lifecycle_parent > 0 && getppid() != lifecycle_parent) {
-            LOG("lifecycle: daemon lost; exiting rather than retaining display 33\n");
-            return 1; /* process exit releases its Screen/decoder handles */
+    uint8_t *chunk=(uint8_t*)malloc(M2_PACKET_MAX);
+    int feed_count=0;
+    uint32_t total=0;
+    uint64_t last_identity_check=0;
+    if(!chunk) return 1;
+    while(!g_m2_player_quit) {
+        uint32_t avail=0, packet_flags=0;
+        int result=m2_matches(shm,&g_m2_player_reader);
+        uint64_t now=now_us();
+        if(result==M2_STALE || (lifecycle_parent>0 && getppid()!=lifecycle_parent)) break;
+        if(now-last_identity_check>=100000ULL) {
+            last_identity_check=now;
+            if(!m2_player_public_matches()) break;
         }
-        /* Apply pause/resume signals here too — when AA is paused, the phone
-         * stops sending H.264 frames, so the decoder's cb_display_picture
-         * stops firing and pause handling stuck inside that callback would
-         * never run. Polling here ensures canim still gets painted on pause
-         * even with no new frames in flight. */
+        /* Never let a paused/no-frame path adopt a new stream or post old data. */
         apply_stage_signals();
-        uint32_t total = shm->total_bytes;
-        if (total == last_total) {
-            usleep(1000);
-            continue;
+        result=m2_read(shm,&g_m2_player_reader,chunk,M2_PACKET_MAX,&avail,&packet_flags);
+        if(result<0) break;
+        if(result!=M2_PACKET) { usleep(1000); continue; }
+        total+=avail;
+        if(packet_flags&M2_IDR) m2_store(&g_m2_can_post,1);
+        {
+            int attempt;
+            for(attempt=0;attempt<20;++attempt) {
+                result=m2_matches(shm,&g_m2_player_reader);
+                if(result!=M2_BUSY) break;
+                usleep(100);
+            }
+            if(result!=M2_PACKET) break; /* never discard a consumed codec/reference packet then keep decoding */
         }
-
-        uint32_t wp = shm->write_pos;
-        uint32_t avail;
-        if (wp >= read_pos)
-            avail = wp - read_pos;
-        else
-            avail = CLUSTER_RING_SIZE - read_pos + wp;
-
-        if (avail == 0) { last_total = total; continue; }
-
-        /* Read into contiguous buffer */
-        uint8_t* chunk = (uint8_t*)malloc(avail);
-        if (!chunk) { last_total = total; continue; }
-
-        if (read_pos + avail <= CLUSTER_RING_SIZE) {
-            memcpy(chunk, shm->ring + read_pos, avail);
-        } else {
-            uint32_t first = CLUSTER_RING_SIZE - read_pos;
-            memcpy(chunk, shm->ring + read_pos, first);
-            memcpy(chunk + first, shm->ring, avail - first);
-        }
-        read_pos = (read_pos + avail) % CLUSTER_RING_SIZE;
-        last_total = total;
 
         /* Feed directly to parser — it handles NAL discovery internally.
          * Log first chunks and any NAL start codes we see for diagnostics. */
@@ -2568,16 +2544,17 @@ int run_h264_mode(int argc, char** argv) {
                         "producer=%.1fkbps decode_fps=%.1f display_fps=%.1f%s\n",
                         pr, g_dec.frames_decoded, g_dec.frames_displayed, feed_count, avail,
                         prod_kbps, dec_fps, disp_fps,
-                        avail > (CLUSTER_RING_SIZE * 3 / 4) ? " RING_NEAR_FULL!" : "");
+                        "");
                     last_t = now; last_bytes = total;
                     last_dec = g_dec.frames_decoded; last_disp = g_dec.frames_displayed;
                 }
             }
             if (g_dec.frames_decoded >= next_log_frames) next_log_frames += 250;
         }
-        free(chunk);
     }
-
+    m2_store(&g_m2_can_post,0);
+    LOG("generation: stream retired/lost; decoder process exiting without rebinding\n");
+    free(chunk); (void)m2_release(shm,&g_m2_player_reader);
     return 0;
 }
 

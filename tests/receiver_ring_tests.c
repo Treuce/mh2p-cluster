@@ -11,6 +11,13 @@ int main(void) {
     uint8_t data[100]; m2_reader reader,other; m2_stamp old;
     cluster_h264_shm_t *s=calloc(1,sizeof(*s)); m2_owners *pool=calloc(1,sizeof(*pool));
     m2_receiver *a,*b; CHECK(s && pool); m2_init(s,boot,1234); CHECK(m2_valid(s));
+    {
+        uint32_t session=0,configuration=0;
+        const uint8_t start[]={8,42,16,0,24,99},missing[]={8,42},truncated[]={8,128};
+        CHECK(m2_start_values(start,sizeof(start),&session,&configuration) && session==42 && configuration==0);
+        CHECK(!m2_start_values(missing,sizeof(missing),&session,&configuration));
+        CHECK(!m2_start_values(truncated,sizeof(truncated),&session,&configuration));
+    }
     a=m2_owner_new(pool,(void*)1,1,s); CHECK(a && a->generation==1);
     CHECK(a->video.native[3]==14 && a->input.native[3]==21);
     CHECK(m2_endpoint_open(pool,&a->video,42,s)==M2_PACKET); old=a->stamp;
