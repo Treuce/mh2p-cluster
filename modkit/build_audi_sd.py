@@ -28,16 +28,30 @@ The upstream e-tron report does not establish A6 compatibility.
 
 ## Copy to SD
 
-Use an empty FAT32 SD card. Copy the CONTENTS of this folder to its root,
-so Data/, Meta/, Mods/, Recovery/, failsafe.sh and this guide are directly
-at the root. Do not add a root cluster_config.json or unrelated mods.
-Keep the card and its original backup copy on the PC; recovery needs them.
-To verify after copying, run VERIFY-CARD.ps1 from PowerShell on the PC:
+Extract the ZIP on the PC first. Use an empty FAT32 SD card, unlocked.
+For the FIRST recovery checks, copy everything EXCEPT Data/ and Meta/ to
+the card root. Mods/, Recovery/, failsafe.sh, SHA256SUMS, VERIFY-CARD.ps1
+and this guide go directly at the root. Do not add a root
+cluster_config.json or unrelated mods. Keep the extracted PC copy.
+
+IMPORTANT: a complete ModKit update card can start installation
+automatically when inserted. Leave BOTH Data/ and Meta/ off the card
+until the recovery checks below pass. Renaming them on the card is not
+the procedure; keep them on the PC. This preflight card relies on your
+already installed ModKit startup hook and does not reinstall ModKit.
+
+Verify the preflight card in Windows PowerShell:
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File X:\\VERIFY-CARD.ps1 -PreflightOnly
+
+Replace X: with the actual card drive. Expected: 38 files verified.
+The verifier also rejects Data/ or Meta/ on a preflight card.
+After the checks pass and you add Data/ and Meta/ for installation, run:
 
     powershell -NoProfile -ExecutionPolicy Bypass -File X:\\VERIFY-CARD.ps1
 
-Replace X: with your actual card drive. Run verification before changing
-marker files or configuration. SHA256SUMS does not include itself or logs.
+Expected: 53 files verified. Run verification before changing marker
+files or configuration. SHA256SUMS does not include itself or logs.
 
 ## Check recovery before installing
 
@@ -47,15 +61,44 @@ produce Logs/ClusterIntegration-failsafe.log and numbered rollback logs.
 The hook is started alongside normal services, so this does not prove it
 finishes before Java starts. Do not deliberately break the MMI to test it.
 
-Over the existing MMI SSH connection, using the actual card mount:
+Park the car; keep it powered for the test. Insert the PREFLIGHT card,
+then use your usual normal MMI restart to test the installed startup hook.
+Do not use the full update card for this check.
 
-    ksh /fs/sda0/Mods/ClusterIntegration/Update/rollback.sh --check
-    ksh /fs/sda0/Mods/ClusterIntegration/Update/rollback.sh --self-test
+Connect from Windows PowerShell (retain any options/key from your working
+connection if it needs them):
+
+    ssh -p 2012 root@172.16.250.248
+
+The following commands run INSIDE the MMI SSH shell, not PowerShell.
+Set the session PATH and locate the card without guessing its mount:
+
+    export PATH=/proc/boot:/bin:/usr/bin:/sbin:/usr/sbin:/mnt/app/armle/bin:/mnt/app/armle/usr/bin:/mnt/app/armle/sbin:/mnt/app/armle/usr/sbin:$PATH
+    CARD=
+    for p in /fs/sda0 /fs/sdb0 /fs/usb0_0; do
+        if [ -f "$p/Mods/ClusterIntegration/Update/rollback.sh" ]; then
+            if [ -n "$CARD" ]; then echo "More than one test card; remove the extra card"; CARD=; break; fi
+            CARD="$p"
+        fi
+    done
+    echo "CARD=$CARD"
+
+Do not run the next commands unless CARD prints one actual mount path:
+
+    ksh "$CARD/Mods/ClusterIntegration/Update/rollback.sh" --check
+    echo "CHECK_EXIT=$?"
+    ksh "$CARD/Mods/ClusterIntegration/Update/rollback.sh" --self-test
+    echo "SELFTEST_EXIT=$?"
+    cat "$CARD/Logs/ClusterIntegration"/rollback-*/result.txt
+    cat "$CARD/Logs/ClusterIntegration-failsafe.log"
 
 The card can instead be /fs/sdb0 or /fs/usb0_0. --self-test uses your actual
 saved GAL bytes in an isolated directory on the SD and removes dummy mod
 files there. It never mounts the app filesystem or signals live processes.
-Expect CHECK_OK / SELFTEST_OK and EXIT_STATUS=0 in the numbered result.txt.
+Expect CHECK_OK / SELFTEST_OK and EXIT_STATUS=0 in the numbered result.txt,
+and MODE=check / EXIT_STATUS=0 in the startup failsafe log from this boot.
+Missing startup logs mean the automatic recovery path has not been shown
+to run. Stop before installing if any check fails or these logs are missing.
 No working byte/digest comparison tool means installation is blocked.
 Resolve that tool limitation before installing; do not bypass it.
 
@@ -67,16 +110,43 @@ The AA-only JAR and Audi dependency stub are included; CarPlay is not opted
 in and there is no force_install.txt. The native/Java binaries are preserved
 from the pinned upstream release. Our receiver generation patch is absent.
 
-Use the existing MH2p ModKit SD update procedure. Merely inserting the card
-does not install the package. An installer log is created under
+Eject the preflight card and save its Logs/ on the PC. Copy the unchanged
+Data/ and Meta/ folders from the extracted package to its root, and verify
+all 53 files without -PreflightOnly. Do not add any enable/force markers.
+
+With the car parked and running safely outdoors, insert the full card.
+ModKit normally starts automatically within about 10 seconds. Allow the
+update to finish without touching the MMI or removing media; multiple
+reboots and engineering screens are expected. Remove the card ONLY when
+it says "Please remove update media", then let normal startup finish.
+If the update does not start or shows an error, retain the screen/error and
+logs; do not force installation or guess a manual engineering-menu update.
+Official procedure: https://lawpaul.github.io/MH2p_SD_ModKit_Site/
+
+An installer log is created under
 Logs/ClusterIntegration/install-N/commands.log and rollback preflight has
 its own rollback-N log. Each log records commands/branches and stderr;
 result.txt contains the exit status. INSTALL_SCRIPT_COMPLETE means this
 script finished, not that AA or cockpit rendering has passed a vehicle test.
 
 Afterwards check normal MMI, Android Auto, stock maps and NavCompass first.
-Connect the phone and request navigation while parked. Save the card Logs/
-plus /tmp/gal_preload.log, /tmp/gal_cluster.log and the card's cluster.log.
+Connect the phone and request Google Maps navigation while parked. Record
+whether AA starts, turn arrows work, and normal maps/NavCompass still work.
+The FIRST pass intentionally does not show the AA map video on the cockpit.
+Record what happens when navigation stops and the phone disconnects; if
+normal functionality does not return, stop and use rollback below.
+
+Save the card Logs/ on the PC. BEFORE reinserting the card for runtime logs
+or recovery, move Data/ and Meta/ back OFF the card to the PC, then verify
+with -PreflightOnly. This prevents a second automatic update. Reconnect SSH,
+locate CARD again and save temporary runtime logs before restarting:
+
+    for f in /tmp/gal_preload.log /tmp/gal_cluster.log /tmp/cluster.log /tmp/cluster_hashed.log; do
+        if [ -f "$f" ]; then cp "$f" "$CARD/Logs/"; fi
+    done
+    sync
+
+Also retain any cluster.log written directly to the card.
 Do not enable video until the diagnostic results have been reviewed.
 
 ## Restore stock functionality
@@ -87,7 +157,9 @@ If SSH works:
 
 For startup recovery, create an empty file at
 Mods/ClusterIntegration/uninstall.txt on this card, insert it and perform
-a normal MMI restart. The root failsafe sees that existing ModKit marker
+a normal MMI restart. Keep Data/ and Meta/ OFF the recovery card so this
+uses the installed startup hook without launching another update.
+The root failsafe sees that existing ModKit marker
 and invokes rollback rather than a check. The same marker also selects
 uninstall when running the ModKit update flow. No separate arm file is used.
 
@@ -105,14 +177,23 @@ It cannot recover a unit which never reaches that execution path.
 Detailed script behaviour: Recovery/RECOVERY_LOGGING.md.
 Private saved GAL bytes are included. Do not publish this card package.
 '''
-VERIFY_PS = r'''$ErrorActionPreference = 'Stop'
+VERIFY_PS = r'''param([switch]$PreflightOnly)
+$ErrorActionPreference = 'Stop'
 $cardRoot = $PSScriptRoot
 $cardPrefix = [IO.Path]::GetFullPath($cardRoot).TrimEnd([char]92) + [IO.Path]::DirectorySeparatorChar
+if ($PreflightOnly) {
+    foreach ($updateFolder in @('Data', 'Meta')) {
+        if (Test-Path -LiteralPath (Join-Path $cardRoot $updateFolder)) {
+            throw "Preflight card must not contain $updateFolder; leave it on the PC until recovery checks pass."
+        }
+    }
+}
 $count = 0
 foreach ($row in Get-Content -LiteralPath (Join-Path $cardRoot 'SHA256SUMS')) {
     if ($row -notmatch '^([0-9a-f]{64})  (.+)$') { throw 'Invalid checksum row' }
     $expectedHash = $Matches[1]
     $relativeName = $Matches[2]
+    if ($PreflightOnly -and $relativeName -match '^(Data|Meta)/') { continue }
     $targetFile = [IO.Path]::GetFullPath((Join-Path $cardRoot $relativeName))
     if (-not $targetFile.StartsWith($cardPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe checksum path' }
     $actualHash = (Get-FileHash -LiteralPath $targetFile -Algorithm SHA256).Hash.ToLowerInvariant()
