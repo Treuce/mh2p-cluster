@@ -44,6 +44,19 @@ If you use a wireless adapter with its own DPI setting, keep it moderate (150 wo
 
 **Uninstall:** put an empty `uninstall.txt` in `Mods/ClusterIntegration/` (and in `Mods/NavCompassIgnore/` to remove that too) and install the card again. ClusterIntegration restores the backed-up originals.
 
+## Emergency rollback (`failsafe.sh`)
+
+If the head unit doesn't boot cleanly after installing this mod, there's an unattended rescue mechanism baked into the ModKit. The install card already ships `failsafe.sh` inside `Mods/ClusterIntegration/` — it does not run by itself. To arm it:
+
+1. On a working computer, open the SD card.
+2. **Copy `Mods/ClusterIntegration/failsafe.sh` to the ROOT of the SD card** (next to `Data/`, `Meta/`, `Mods/`).
+3. Insert the card into the car and switch the ignition on. The ModKit's early-boot code runs `failsafe.sh` from the card root before any mod's Persist step, so it works even if our Persist script is what's breaking things.
+4. Wait for the unit to come up. The script invokes the mod's `uninstall.sh`, which restores every file the installer replaced from its backups.
+5. Remove the card and **delete the root-level `failsafe.sh` from the card** before using it again — otherwise it rolls back on every boot.
+6. A log of what it did is written to `Logs/ClusterIntegration-failsafe.log` on the card.
+
+Normal uninstall (when the head unit is working normally) is the standard ModKit path: put an empty `uninstall.txt` in `Mods/ClusterIntegration/` on the card and run the ModKit — same effect, no rush.
+
 ## Turning logs on (troubleshooting)
 
 The zip writes no logs during normal use. To diagnose a problem, turn on what you need, re-run the ModKit install, and reproduce the problem. Turn it back off the same way afterwards.
