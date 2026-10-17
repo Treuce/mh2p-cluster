@@ -129,6 +129,16 @@ for name in sorted(os.listdir(upd)):
     print(f"  derive:  Mods/ClusterIntegration/Update/aa_only/{os.path.basename(dst)} ({kept} entries kept, {dropped} CarPlay entries dropped)")
 PY
 
+# Keep the tracked copy of the derived Audi jar in step with the package, so
+# the overlay in this repository ships the same bytes the build produced.
+for f in "$PKG"/Mods/ClusterIntegration/Update/aa_only/ClusterIntegration_*_aa.jar; do
+    [[ -f "$f" ]] || continue
+    dest="$OVERLAY/ClusterIntegration/Update/aa_only/${f##*/}"
+    if [[ ! -f "$dest" ]] || ! cmp -s "$f" "$dest"; then
+        mkdir -p "$(dirname "$dest")"; cp "$f" "$dest"; echo "  tracked: modkit/Mods/ClusterIntegration/Update/aa_only/${f##*/} refreshed"
+    fi
+done
+
 rm -f "$OUT_ABS"
 ( cd "$PKG" && zip -q -r -X "$OUT_ABS" . )
 echo "output:  $OUT ($changed file(s) changed vs source, $(du -h "$OUT_ABS" | cut -f1))"
