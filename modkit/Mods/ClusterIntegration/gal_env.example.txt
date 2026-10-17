@@ -10,10 +10,13 @@
 #
 # Insets, in pixels of the codec frame: the phone keeps its cluster UI out
 # of these margins, so a cropped (fill / zoom > 1) window loses no content.
-# e-tron (1920x722 cockpit) with gal_h264.codecRes=1080 and mode="fill":
-# the centre 722 rows of the 1080 are shown, so keep the UI out of 180 px
-# top and bottom. With codecRes=720 use 120 instead.
-#GAL_CLUSTER_INSET_TOP=180
-#GAL_CLUSTER_INSET_BOTTOM=180
-#GAL_CLUSTER_INSET_LEFT=0
-#GAL_CLUSTER_INSET_RIGHT=0
+# e-tron (1920x722 cockpit) with gal_h264.codecRes=1080, mode="fill" and
+# panY=0.248: the bottom 722 rows of the 1080 are shown (the vehicle sits
+# near the bottom when navigating), so keep Google's UI out of the top 358.
+# Google honours the top and bottom insets but not the left and right ones.
+#GAL_CLUSTER_INSET_TOP=358
+#GAL_CLUSTER_INSET_BOTTOM=0
+#
+# The stream size asked from the phone (480, 720 or 1080); the e-tron uses
+# 1080 so the 1920-wide frame maps 1:1 onto the panel.
+#GAL_CLUSTER_RES=1080

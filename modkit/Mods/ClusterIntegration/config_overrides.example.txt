@@ -32,13 +32,16 @@
 #   mode: letter (fit, black bars), fill (cover, crops top/bottom), stretch
 #   codecRes: 480, 720 or 1080 (the stream size asked from the phone)
 #   zoomX/zoomY > 1 enlarge (crop), panX/panY shift the visible part
-# e-tron (1920x722 cockpit): codecRes=1080 with mode="fill" and the 180 px
-# insets from gal_env.txt shows the centre band pixel for pixel across the
-# full width; see the README. letter (the default) pillarboxes 16:9 frames.
+# e-tron (1920x722 cockpit): codecRes=1080 with mode="fill" shows a 722-row
+# band of the 1080-row frame pixel for pixel across the full width. Google
+# puts the vehicle near the bottom of the frame when navigating, so the band
+# is shifted down to the bottom rows with panY=0.248 and the matching
+# GAL_CLUSTER_INSET_TOP=358 in gal_env.txt keeps Google's card below the
+# cut. letter (the default) pillarboxes 16:9 frames; see the README.
 #gal_h264.mode="fill"
 #gal_h264.codecRes=1080
+#gal_h264.panY=0.248
 #gal_h264.zoomX=1.0
 #gal_h264.zoomY=1.0
 #gal_h264.panX=0.0
-#gal_h264.panY=0.0
 # Same keys for the mirror (screen-capture) path: mirror.mode, mirror.zoomX ...
