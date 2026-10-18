@@ -45,6 +45,12 @@ modkit/build_aa_jar.sh [~/etron-stock/lsd] [~/.cache/ecj-3.20.0.jar]
 modkit/splash/canim_tool.py info builds/<extracted>/Update/cluster
 modkit/splash/canim_tool.py preview modkit/splash/splash.png /tmp/preview.png
 
+# Cluster display entry the hook offers the phone (margins/insets, 54 bytes in
+# gal_cluster.so): decode a .so or an aa_sdresp dump, build from key=value,
+# patch; build_sd_package.sh applies modkit/template/template.txt
+modkit/template/cluster_template_tool.py decode /tmp/aa_sdresp_1.bin
+modkit/template/cluster_template_tool.py build /tmp/t.bin inset_bottom=220
+
 # Rebuild the StorageMountHandler stand-in (JDK required) and its jar under Update/audi/
 modkit/stub/build_stub.sh
 
@@ -74,7 +80,7 @@ The gate scripts assert on the installer's log lines, so a wording change in `in
 
 ## Open items on the e-tron (as of the last session)
 
-- Cockpit fit is solved (`codecRes=1080`, `mode=fill`, `panY=0.248`, top inset 358); Google ignores the left/right insets, so its turn card stays flush right, clipped by the housing.
+- Cockpit fit: `codecRes=1080`, `mode=fill`, `panY=0` plus the cluster entry built into `gal_cluster.so` from `modkit/template/template.txt` (Q7 values from PR #11: height_margin 358, margins 179/180, content insets bottom 195 / left+right 160, density 200). The `GAL_CLUSTER_INSET_*` env vars never reach the phone (the hook memcpy's a fixed 54-byte entry, one byte patched for the resolution); the earlier recipe `panY=0.248` + inset 358 worked only by panning. Untested on the e-tron as of 2026-10-18; `cluster_template_tool.py decode /tmp/aa_sdresp_*.bin` shows what was sent.
 - BAP manoeuvres are sent (`BAP_MANEUVER`/`BAP_DISTANCE` in `cluster.log`) but the cockpit draws no Audi-style arrow yet.
 - The unit's stock `lsd.jar` is now available (extracted to `~/etron-stock/lsd/`, outside the repo; 77,288 classes). Findings so far: the stock navigation registers `IMapClusterService` from `de.audi.tghu.navi.app.map.AbstractMapActivator` and reaches it through a `ServiceTracker` by name (`MapClusterServiceProxy`); the shipped cluster integration never calls it at session end (no `wakeNativeNavCluster` in the shipped class), which is why the cockpit went black. `KombiMapHandback` (2026-10-17, untested on the car as of this note) does the hide/show hand-back; if the `KOMBI_MAP: IMapClusterService registered` line never appears, read the `KOMBI_MAP: service:` inventory it logs at session start.
 - Steering-wheel zoom: `MapClusterService.changeZoomLevel(int)` fires `RemoteZoomView.fireOnZoomLevelChanged`, i.e. the cockpit's zoom reaches the HMI through the cluster BAP listener (`de/audi/tghu/navi/app/cluster/CombiBAPListener`, `NaviClusterExtensionFPKRevo$ZoomViewListener`); routing it to the phone map is not started.

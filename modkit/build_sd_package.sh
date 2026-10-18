@@ -156,6 +156,22 @@ if [[ -f "$SPLASH_PNG" ]]; then
     echo "  splash:  Mods/ClusterIntegration/Update/cluster boot splash replaced from ${SPLASH_PNG##*/}"
 fi
 
+# Cluster display entry offered to the phone. With modkit/template/template.txt
+# present (or TEMPLATE_TXT=<file>), the 54-byte entry inside gal_cluster.so is
+# rebuilt with those margins/insets (modkit/template/cluster_template_tool.py:
+# same-length overwrite at the dhu_cluster_service symbol, verified). Without
+# the file the hook ships as released, and the phone lays its cluster UI out
+# for the whole frame.
+TEMPLATE_TXT="${TEMPLATE_TXT:-$HERE/template/template.txt}"
+if [[ -f "$TEMPLATE_TXT" ]]; then
+    HOOK_SO="$PKG/Mods/ClusterIntegration/Update/gal_cluster.so"
+    mapfile -t TPL_KEYS < <(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$TEMPLATE_TXT" | grep '=')
+    python3 "$HERE/template/cluster_template_tool.py" build "$WORK/template.bin" "${TPL_KEYS[@]}" | sed 's/^/  template: /'
+    python3 "$HERE/template/cluster_template_tool.py" patch "$HOOK_SO" "$WORK/template.bin" "$WORK/gal_cluster.patched" | head -1 | sed 's/^/  template: /'
+    cp "$WORK/gal_cluster.patched" "$HOOK_SO" && chmod 755 "$HOOK_SO"
+    echo "  template: Mods/ClusterIntegration/Update/gal_cluster.so cluster entry replaced from ${TEMPLATE_TXT##*/}"
+fi
+
 # Keep the tracked copy of the derived Audi jar in step with the package, so
 # the overlay in this repository ships the same bytes the build produced.
 for f in "$PKG"/Mods/ClusterIntegration/Update/aa_only/ClusterIntegration_*_aa.jar; do
