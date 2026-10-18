@@ -168,6 +168,8 @@ The easiest way is to just scp it to the target if you <a href="https://github.c
 
 ## Audi MH2p (e-tron and other MLBevo Audis) — experimental
 
+> **Audi Q7 (P2711) profile:** full-width map in the Virtual Cockpit with the car marker above Audi's bottom bar, native-map hiding, and fixes for a black cockpit and repeated reconnects. See [audi/q7-p2711](audi/q7-p2711/README.md).
+
 > **Status:** running on an e-tron 55 (`MH2p_ER_AUG35_P2873`, UK, RHD): the shadowed Java class loads, turn-by-turn services are found, the phone streams the cluster map and the virtual cockpit shows it; the cockpit fit is solved; what is being tested now is the hand-back to the Audi map when Android Auto ends (see [Handing the cockpit back](#handing-the-cockpit-back-to-the-audi-map-when-android-auto-ends)). The port changes the install gate and packaging: the native binaries and the config are byte-identical to the Porsche release except for two verified byte patches the package build applies (the boot splash image inside `cluster` from `modkit/splash/splash.png`, see [Changing the cockpit loading splash](#changing-the-cockpit-loading-splash), and the 54-byte cluster display entry inside `gal_cluster.so` from `modkit/template/template.txt`, see [Fitting the map](#fitting-the-map-to-the-e-trons-cockpit)), the Java classes are the release classes (on Audi the installer uses a copy of the JAR with the CarPlay classes dropped) plus two added classes, a no-op stand-in for the Porsche-only `StorageMountHandler` that the Audi HMI does not ship and `KombiMapHandback`, which gives the cockpit back to the Audi map, and a rebuilt `AndroidAuto2Subsystem` that wires the latter in.
 
 ### Why it might just work

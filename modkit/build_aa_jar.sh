@@ -30,6 +30,7 @@ PKG=de/audi/app/terminalmode/smartphone/androidauto2
 SOURCES=(
     "$REPO/lsd/$PKG/AndroidAuto2Subsystem.java"
     "$REPO/lsd/$PKG/nav/KombiMapHandback.java"
+    "$REPO/lsd/$PKG/nav/KombiMapGuard.java"
 )
 
 [[ -d "$STOCK/de/audi/tghu" ]] || { echo "error: stock classes not found under $STOCK" >&2; exit 1; }
