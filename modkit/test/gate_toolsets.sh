@@ -125,6 +125,11 @@ rm -f "$SCR/fakesd/Mods/ClusterIntegration/gal_env.txt"; out=$(run)
 [[ ! -f $GE ]] && echo "$out" | grep -q 'remove gal env:' && res "I gal_env removed when gal_env.txt is gone" PASS || res "I gal_env removed" FAIL
 printf 'GAL_CLUSTER_LOG=1\n' > "$SCR/fakesd/Mods/ClusterIntegration/gal_env.txt"; run >/dev/null; "$M" "$MOD_PATH/uninstall.sh" >/dev/null 2>&1
 [[ ! -f $GE && ! -d /mnt/app/eso/bin/apps/cluster ]] && res "I uninstall removes gal_env via manifest" PASS || res "I uninstall removes gal_env" FAIL
+printf 'on\n' > "$SCR/fakesd/Mods/ClusterIntegration/daemon_log.txt"; out=$(run)
+DV=/mnt/app/eso/bin/apps/cluster/daemon_verbose
+[[ -f $DV ]] && echo "$out" | grep -q 'daemon log:        ON' && res "I daemon_log.txt installs the daemon_verbose marker" PASS || res "I daemon_log.txt marker" FAIL
+rm -f "$SCR/fakesd/Mods/ClusterIntegration/daemon_log.txt"; out=$(run)
+[[ ! -f $DV ]] && echo "$out" | grep -q 'daemon log:        OFF' && res "I daemon_verbose removed when daemon_log.txt is gone" PASS || res "I daemon_verbose removed" FAIL
 rm -rf /mnt/app /fs /ifs "$SCR/jarsrc" /tmp/gal_preload.log
 echo "=== J: review fixes (stub kept without audi/, weak comparator + mtime)"
 setup MH2p_ER_AUG35_P2873 aa aa ""; run >/dev/null; [[ -f $STUB ]] || res "J precondition stub installed" FAIL

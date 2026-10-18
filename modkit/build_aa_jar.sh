@@ -29,7 +29,6 @@ STUB="$HERE/Mods/ClusterIntegration/Update/audi/ClusterIntegration_StorageMountH
 PKG=de/audi/app/terminalmode/smartphone/androidauto2
 SOURCES=(
     "$REPO/lsd/$PKG/AndroidAuto2Subsystem.java"
-    "$REPO/lsd/$PKG/nav/KombiMapHandback.java"
     "$REPO/lsd/$PKG/nav/KombiMapGuard.java"
 )
 

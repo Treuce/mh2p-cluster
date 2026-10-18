@@ -43,7 +43,6 @@ import de.audi.app.terminalmode.smartphone.androidauto2.mic.AndroidAuto2MicHandl
 import de.audi.app.terminalmode.smartphone.androidauto2.nav.AndroidAuto2NavHandler;
 import de.audi.app.terminalmode.smartphone.androidauto2.nav.AndroidAutoClusterIntegration;
 import de.audi.app.terminalmode.smartphone.androidauto2.nav.KombiMapGuard;
-import de.audi.app.terminalmode.smartphone.androidauto2.nav.KombiMapHandback;
 import de.audi.app.terminalmode.smartphone.androidauto2.video.AndroidAuto2VideoHandler;
 import de.audi.atip.interapp.combi.bap.navi.CombiBAPServiceNavi;
 import de.audi.atip.interapp.combi.bap.audio.CombiBAPServiceAudio;
@@ -94,7 +93,6 @@ IDSIControllerStateListener {
     private final AndroidAutoSmartphoneProperties androidAutoSmartphoneProperties;
     private final IEventBus eventBus;
     private final AndroidAutoClusterIntegration clusterIntegration;
-    private final KombiMapHandback kombiMapHandback;
 
     public AndroidAuto2Subsystem(ITerminalModeDSIKeyEventsController iTerminalModeDSIKeyEventsController, DSIAndroidAuto2DSIController dSIAndroidAuto2DSIController, LogChannel logChannel, IContext iContext, SmartphoneManager smartphoneManager, AndroidAuto2ListenerDistributor androidAuto2ListenerDistributor, AndroidAuto2RequestHandler androidAuto2RequestHandler, AndroidAuto2EventListener androidAuto2EventListener, IStateHandler iStateHandler, AndroidAuto2AudioHandler androidAuto2AudioHandler, AndroidAuto2MicHandler androidAuto2MicHandler, AndroidAuto2NavHandler androidAuto2NavHandler, AndroidAuto2VideoHandler androidAuto2VideoHandler, AndroidAuto2VoiceSessionHandler androidAuto2VoiceSessionHandler, AndroidAuto2DSIManager androidAuto2DSIManager, IEventBus iEventBus, DSIAndroidAuto2Safe dSIAndroidAuto2Safe, AndroidAutoSmartphoneProperties androidAutoSmartphoneProperties) {
         this.keyEventController = iTerminalModeDSIKeyEventsController;
@@ -365,18 +363,6 @@ IDSIControllerStateListener {
             logChannel.log(100000, "[%1.<init>] Error looking up IMapClusterService: %2", (Object)LOGCLASS, (Object)e.toString());
         }
 
-        // Hand-back of the cluster map after Android Auto ends. The one-shot
-        // lookup above found nothing on the e-tron; KombiMapHandback tracks
-        // IMapClusterService by name for as long as the HMI runs and calls it
-        // by reflection, so a missing class cannot break Android Auto.
-        KombiMapHandback handback = null;
-        try {
-            handback = new KombiMapHandback(iContext, logChannel);
-        } catch (Throwable t) {
-            logChannel.log(100000, "[%1.<init>] KombiMapHandback not started: %2", (Object)LOGCLASS, (Object)t.toString());
-        }
-        this.kombiMapHandback = handback;
-
         androidAuto2ListenerDistributor.addListener(new DSIAndroidAuto2ListenerSafe[]{androidAuto2RequestHandler, androidAuto2EventListener, androidAuto2AudioHandler, androidAuto2MicHandler, androidAuto2NavHandler, androidAuto2VideoHandler, androidAuto2VoiceSessionHandler, this.clusterIntegration});
         this.stateHandler = iStateHandler;
         this.logger.log(1000000, "[%1.<init>] AndroidAutoClusterIntegration registered with listener distributor", (Object)LOGCLASS);
@@ -406,13 +392,6 @@ IDSIControllerStateListener {
         // arrives. Mirrors the deactivate() → onAndroidAutoTerminated() pattern.
         if (this.clusterIntegration != null) {
             this.clusterIntegration.onAndroidAutoActivated();
-        }
-        if (this.kombiMapHandback != null) {
-            try {
-                this.kombiMapHandback.onAndroidAutoActivated();
-            } catch (Throwable t) {
-                this.logger.log(100000, "[%1.activate] KombiMapHandback: %2", (Object)LOGCLASS, (Object)t.toString());
-            }
         }
 
         this.context.getTMKeyEventController().setDSIKeyEventController(this.keyEventController);
@@ -575,13 +554,6 @@ IDSIControllerStateListener {
         if (this.clusterIntegration != null) {
             this.clusterIntegration.onAndroidAutoTerminated();
         }
-        if (this.kombiMapHandback != null) {
-            try {
-                this.kombiMapHandback.onAndroidAutoTerminated();
-            } catch (Throwable t) {
-                this.logger.log(100000, "[%1.deactivate] KombiMapHandback: %2", (Object)LOGCLASS, (Object)t.toString());
-            }
-        }
         
         this.stateHandler.removeStateChangeActions();
         this.androidAuto2DSIManager.deactivate();
@@ -596,13 +568,6 @@ IDSIControllerStateListener {
         // Clear cluster display when DSI becomes unavailable
         if (this.clusterIntegration != null) {
             this.clusterIntegration.onAndroidAutoTerminated();
-        }
-        if (this.kombiMapHandback != null) {
-            try {
-                this.kombiMapHandback.onAndroidAutoTerminated();
-            } catch (Throwable t) {
-                this.logger.log(100000, "[%1.dsiUnavailable] KombiMapHandback: %2", (Object)LOGCLASS, (Object)t.toString());
-            }
         }
         
         this.dsiAvailable = false;

@@ -156,6 +156,16 @@ if [[ -f "$SPLASH_PNG" ]]; then
     echo "  splash:  Mods/ClusterIntegration/Update/cluster boot splash replaced from ${SPLASH_PNG##*/}"
 fi
 
+# Byte patches to the daemon proved on other cars (modkit/patches/
+# cluster.patches.txt, applied by apply_patches.py after verifying the bytes
+# they replace). Without the file the daemon ships as released.
+CLUSTER_PATCHES="${CLUSTER_PATCHES:-$HERE/patches/cluster.patches.txt}"
+if [[ -f "$CLUSTER_PATCHES" ]]; then
+    CLUSTER_BIN="$PKG/Mods/ClusterIntegration/Update/cluster"
+    python3 "$HERE/patches/apply_patches.py" "$CLUSTER_BIN" "$CLUSTER_PATCHES" "$WORK/cluster.bytepatched" | sed 's/^/  patches: /'
+    cp "$WORK/cluster.bytepatched" "$CLUSTER_BIN" && chmod 755 "$CLUSTER_BIN"
+fi
+
 # Cluster display entry offered to the phone. With modkit/template/template.txt
 # present (or TEMPLATE_TXT=<file>), the 54-byte entry inside gal_cluster.so is
 # rebuilt with those margins/insets (modkit/template/cluster_template_tool.py:

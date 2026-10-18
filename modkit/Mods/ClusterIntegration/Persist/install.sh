@@ -23,7 +23,11 @@ if [[ -x "/eso/bin/apps/cluster/cluster" ]]; then
         if { read p < "$DAEMON_PID" && [[ -n "$p" && -d "/proc/$p" ]]; } 2>/dev/null; then
                 print "persist: daemon already running, pid $p" >> "$DAEMON_LOG" 2>/dev/null
         else
-                /eso/bin/apps/cluster/cluster daemon >/dev/null 2>&1 &
+                # verbose=2 (cluster_daemon.log) only with the marker the
+                # installer sets from Mods/ClusterIntegration/daemon_log.txt
+                V=""
+                [[ -f /eso/bin/apps/cluster/daemon_verbose ]] && V="verbose=2"
+                /eso/bin/apps/cluster/cluster daemon $V >/dev/null 2>&1 &
                 p=$!
                 print $p > "$DAEMON_PID" 2>/dev/null
                 print "persist: started daemon pid $p (pid file written: $?)" >> "$DAEMON_LOG" 2>/dev/null
