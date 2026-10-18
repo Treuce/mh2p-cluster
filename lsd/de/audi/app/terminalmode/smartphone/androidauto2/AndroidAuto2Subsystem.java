@@ -43,6 +43,7 @@ import de.audi.app.terminalmode.smartphone.androidauto2.mic.AndroidAuto2MicHandl
 import de.audi.app.terminalmode.smartphone.androidauto2.nav.AndroidAuto2NavHandler;
 import de.audi.app.terminalmode.smartphone.androidauto2.nav.AndroidAutoClusterIntegration;
 import de.audi.app.terminalmode.smartphone.androidauto2.nav.KombiMapGuard;
+import de.audi.app.terminalmode.smartphone.androidauto2.nav.KombiMapHandback;
 import de.audi.app.terminalmode.smartphone.androidauto2.video.AndroidAuto2VideoHandler;
 import de.audi.atip.interapp.combi.bap.navi.CombiBAPServiceNavi;
 import de.audi.atip.interapp.combi.bap.audio.CombiBAPServiceAudio;
@@ -93,6 +94,7 @@ IDSIControllerStateListener {
     private final AndroidAutoSmartphoneProperties androidAutoSmartphoneProperties;
     private final IEventBus eventBus;
     private final AndroidAutoClusterIntegration clusterIntegration;
+    private final KombiMapHandback kombiMapHandback;
 
     public AndroidAuto2Subsystem(ITerminalModeDSIKeyEventsController iTerminalModeDSIKeyEventsController, DSIAndroidAuto2DSIController dSIAndroidAuto2DSIController, LogChannel logChannel, IContext iContext, SmartphoneManager smartphoneManager, AndroidAuto2ListenerDistributor androidAuto2ListenerDistributor, AndroidAuto2RequestHandler androidAuto2RequestHandler, AndroidAuto2EventListener androidAuto2EventListener, IStateHandler iStateHandler, AndroidAuto2AudioHandler androidAuto2AudioHandler, AndroidAuto2MicHandler androidAuto2MicHandler, AndroidAuto2NavHandler androidAuto2NavHandler, AndroidAuto2VideoHandler androidAuto2VideoHandler, AndroidAuto2VoiceSessionHandler androidAuto2VoiceSessionHandler, AndroidAuto2DSIManager androidAuto2DSIManager, IEventBus iEventBus, DSIAndroidAuto2Safe dSIAndroidAuto2Safe, AndroidAutoSmartphoneProperties androidAutoSmartphoneProperties) {
         this.keyEventController = iTerminalModeDSIKeyEventsController;
@@ -363,6 +365,18 @@ IDSIControllerStateListener {
             logChannel.log(100000, "[%1.<init>] Error looking up IMapClusterService: %2", (Object)LOGCLASS, (Object)e.toString());
         }
 
+        // Hand-back of the cluster map after Android Auto ends. The one-shot
+        // lookup above found nothing on the e-tron; KombiMapHandback tracks
+        // IMapClusterService by name for as long as the HMI runs and calls it
+        // by reflection, so a missing class cannot break Android Auto.
+        KombiMapHandback handback = null;
+        try {
+            handback = new KombiMapHandback(iContext, logChannel);
+        } catch (Throwable t) {
+            logChannel.log(100000, "[%1.<init>] KombiMapHandback not started: %2", (Object)LOGCLASS, (Object)t.toString());
+        }
+        this.kombiMapHandback = handback;
+
         androidAuto2ListenerDistributor.addListener(new DSIAndroidAuto2ListenerSafe[]{androidAuto2RequestHandler, androidAuto2EventListener, androidAuto2AudioHandler, androidAuto2MicHandler, androidAuto2NavHandler, androidAuto2VideoHandler, androidAuto2VoiceSessionHandler, this.clusterIntegration});
         this.stateHandler = iStateHandler;
         this.logger.log(1000000, "[%1.<init>] AndroidAutoClusterIntegration registered with listener distributor", (Object)LOGCLASS);
@@ -392,6 +406,13 @@ IDSIControllerStateListener {
         // arrives. Mirrors the deactivate() → onAndroidAutoTerminated() pattern.
         if (this.clusterIntegration != null) {
             this.clusterIntegration.onAndroidAutoActivated();
+        }
+        if (this.kombiMapHandback != null) {
+            try {
+                this.kombiMapHandback.onAndroidAutoActivated();
+            } catch (Throwable t) {
+                this.logger.log(100000, "[%1.activate] KombiMapHandback: %2", (Object)LOGCLASS, (Object)t.toString());
+            }
         }
 
         this.context.getTMKeyEventController().setDSIKeyEventController(this.keyEventController);
@@ -461,7 +482,7 @@ IDSIControllerStateListener {
             public void execute(CommandList commandList, ITMState iTMState, IRequestor iRequestor, long l) {
                 AndroidAuto2Subsystem.this.logger.log(1000000, "[%1.changeState] Screen: MU -> Device", (Object)LOGCLASS);
                 AndroidAuto2Subsystem.this.keyEventController.clearOutstandingEvents();
-                if (IRequestor.DEVICE.isNot((Object)iRequestor)) {
+                if (IRequestor.DEVICE.isNot(iRequestor)) {
                     commandList.add((ICommand)new RequestModeChange(AndroidAuto2Subsystem.this.context, iTMState, l, AndroidAuto2Subsystem.this.stateHandler));
                 }
             }
@@ -470,7 +491,7 @@ IDSIControllerStateListener {
 
             public void execute(CommandList commandList, ITMState iTMState, IRequestor iRequestor, long l) {
                 AndroidAuto2Subsystem.this.logger.log(1000000, "[%1.changeState] Screen: Device -> MU", (Object)LOGCLASS);
-                if (!iRequestor.isOneOf((Object)IRequestor.DEVICE, (Object)IRequestor.DEVICE_WHILE_DISCONNECTING) && !AndroidAuto2Subsystem.this.stateHandler.getCurrentState().isAccessRestricted(Resource.SCREEN)) {
+                if (!iRequestor.isOneOf(IRequestor.DEVICE, IRequestor.DEVICE_WHILE_DISCONNECTING) && !AndroidAuto2Subsystem.this.stateHandler.getCurrentState().isAccessRestricted(Resource.SCREEN)) {
                     commandList.add((ICommand)new RequestModeChange(AndroidAuto2Subsystem.this.context, iTMState, l, AndroidAuto2Subsystem.this.stateHandler));
                 }
             }
@@ -479,7 +500,7 @@ IDSIControllerStateListener {
 
             public void execute(CommandList commandList, ITMState iTMState, IRequestor iRequestor, long l) {
                 AndroidAuto2Subsystem.this.logger.log(1000000, "[%1.changeState] audio media: device -> MU", (Object)LOGCLASS);
-                if (iRequestor.is((Object)IRequestor.MAINUNIT)) {
+                if (iRequestor.is(IRequestor.MAINUNIT)) {
                     commandList.add((ICommand)new RequestModeChange(AndroidAuto2Subsystem.this.context, iTMState, l, AndroidAuto2Subsystem.this.stateHandler));
                 }
             }
@@ -488,10 +509,10 @@ IDSIControllerStateListener {
 
             public void execute(CommandList commandList, ITMState iTMState, IRequestor iRequestor, long l) {
                 AndroidAuto2Subsystem.this.logger.log(1000000, "[%1.changeState] speech: device -> nobody", (Object)LOGCLASS);
-                if (iTMState.isAppFree(Application.SPEECH) && iTMState.isResourceOwnerDevice(Resource.AUDIO_MEDIA) && !iTMState.getStateForResource(Resource.AUDIO_MEDIA).is((Object)ResourceState.PAUSED_BY_MUTE)) {
+                if (iTMState.isAppFree(Application.SPEECH) && iTMState.isResourceOwnerDevice(Resource.AUDIO_MEDIA) && !iTMState.getStateForResource(Resource.AUDIO_MEDIA).is(ResourceState.PAUSED_BY_MUTE)) {
                     AndroidAuto2Subsystem.this.androidAuto2DSIManager.resume();
                 }
-                if (iRequestor.is((Object)IRequestor.MAINUNIT)) {
+                if (iRequestor.is(IRequestor.MAINUNIT)) {
                     commandList.add((ICommand)new RequestModeChange(AndroidAuto2Subsystem.this.context, iTMState, -1L, AndroidAuto2Subsystem.this.stateHandler));
                 }
             }
@@ -500,7 +521,7 @@ IDSIControllerStateListener {
 
             public void execute(CommandList commandList, ITMState iTMState, IRequestor iRequestor, long l) {
                 AndroidAuto2Subsystem.this.logger.log(1000000, "[%1.changeState] speech: nobody -> mainunit", (Object)LOGCLASS);
-                if (iRequestor.is((Object)IRequestor.MAINUNIT)) {
+                if (iRequestor.is(IRequestor.MAINUNIT)) {
                     commandList.add((ICommand)new RequestModeChange(AndroidAuto2Subsystem.this.context, iTMState, l, AndroidAuto2Subsystem.this.stateHandler));
                 }
             }
@@ -509,7 +530,7 @@ IDSIControllerStateListener {
 
             public void execute(CommandList commandList, ITMState iTMState, IRequestor iRequestor, long l) {
                 AndroidAuto2Subsystem.this.logger.log(1000000, "[%1.changeState] speech: mainunit -> nobody", (Object)LOGCLASS);
-                if (iRequestor.is((Object)IRequestor.MAINUNIT)) {
+                if (iRequestor.is(IRequestor.MAINUNIT)) {
                     commandList.add((ICommand)new RequestModeChange(AndroidAuto2Subsystem.this.context, iTMState, l, AndroidAuto2Subsystem.this.stateHandler));
                 }
             }
@@ -518,7 +539,7 @@ IDSIControllerStateListener {
 
             public void execute(CommandList commandList, ITMState iTMState, IRequestor iRequestor, long l) {
                 AndroidAuto2Subsystem.this.logger.log(1000000, "[%1.changeState] Navi: Device -> MU", (Object)LOGCLASS);
-                if (iRequestor.is((Object)IRequestor.MAINUNIT)) {
+                if (iRequestor.is(IRequestor.MAINUNIT)) {
                     commandList.add((ICommand)new RequestModeChange(AndroidAuto2Subsystem.this.context, iTMState, l, AndroidAuto2Subsystem.this.stateHandler));
                 }
             }
@@ -527,7 +548,7 @@ IDSIControllerStateListener {
 
             public void execute(CommandList commandList, ITMState iTMState, IRequestor iRequestor, long l) {
                 AndroidAuto2Subsystem.this.logger.log(1000000, "[%1.changeState] Navi: Nobody -> MU", (Object)LOGCLASS);
-                if (iRequestor.is((Object)IRequestor.MAINUNIT)) {
+                if (iRequestor.is(IRequestor.MAINUNIT)) {
                     commandList.add((ICommand)new RequestModeChange(AndroidAuto2Subsystem.this.context, iTMState, l, AndroidAuto2Subsystem.this.stateHandler));
                 }
             }
@@ -554,6 +575,13 @@ IDSIControllerStateListener {
         if (this.clusterIntegration != null) {
             this.clusterIntegration.onAndroidAutoTerminated();
         }
+        if (this.kombiMapHandback != null) {
+            try {
+                this.kombiMapHandback.onAndroidAutoTerminated();
+            } catch (Throwable t) {
+                this.logger.log(100000, "[%1.deactivate] KombiMapHandback: %2", (Object)LOGCLASS, (Object)t.toString());
+            }
+        }
         
         this.stateHandler.removeStateChangeActions();
         this.androidAuto2DSIManager.deactivate();
@@ -568,6 +596,13 @@ IDSIControllerStateListener {
         // Clear cluster display when DSI becomes unavailable
         if (this.clusterIntegration != null) {
             this.clusterIntegration.onAndroidAutoTerminated();
+        }
+        if (this.kombiMapHandback != null) {
+            try {
+                this.kombiMapHandback.onAndroidAutoTerminated();
+            } catch (Throwable t) {
+                this.logger.log(100000, "[%1.dsiUnavailable] KombiMapHandback: %2", (Object)LOGCLASS, (Object)t.toString());
+            }
         }
         
         this.dsiAvailable = false;
